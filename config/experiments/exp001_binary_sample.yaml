@@ -1,0 +1,55 @@
+# exp001_binary on the committed sample population.
+#
+#   fruitfly run --config config/experiments/exp001_binary_sample.yaml
+#
+# This is the *fast, reproducible* configuration behind the numbers tabulated in
+# EXPERIMENTS.md "Set B" (200 neurons, 60 episodes, ~8 s per run on a laptop).
+# It is expected to report learning_detected=false. That is the current honest
+# result of the project, not a setup error -- see EXPERIMENTS.md and LIMITATIONS.md.
+#
+# Everything not listed here comes from config/default.yaml, whose values are the
+# calibrated ones (see the appendix in EXPERIMENTS.md for how they were chosen).
+
+name: exp001_binary_sample
+experiment: exp001_binary
+notes: >-
+  Two stimuli, one synapse population, group-rate readout. Held-out split is
+  EXHAUSTIVE (both stimuli are enumerated), so this measures associative learning
+  only and says nothing about generalisation to unseen inputs.
+
+data:
+  source: connections_filtered
+
+graph:
+  mode: sample            # the committed data/sample/fafb_v783 files, no download needed
+  n_neurons: 200
+  selection: connected_subgraph
+  weight_transform: log1p
+  counterbalance_init: true
+
+plasticity:
+  rule: reward_stdp
+  eta: 0.003
+  normalize: colsum
+  center_eligibility: true
+  plastic_targets: output
+  w_max: 8.0
+
+reward:
+  credit_mode: auto
+  trace_tau_ms: 60.0
+  baseline_subtract: false
+
+lif:
+  noise: 0.8
+  background_current: 1.5
+
+train:
+  episodes: 60
+  eval_trials: 48
+  eval_every: 10
+  seed: 1
+  control: ""             # set to no_plasticity | shuffled_wiring | sham_reward for the controls
+
+viz:
+  enabled: false
