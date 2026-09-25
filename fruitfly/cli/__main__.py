@@ -284,6 +284,15 @@ def cmd_reservoir(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Serve the desk-fly demo. The UI states on screen that it is a placeholder."""
+    from ..demo.server import run
+
+    print(f"desk-fly demo on http://{args.host}:{args.port}  (Ctrl+C to stop)")
+    print("NOTE: the default backend is a snippet library, not the simulated connectome.")
+    return run(args.host, int(args.port))
+
+
 def cmd_rules(args: argparse.Namespace) -> int:
     from ..io.decoder import available_decoders
     from ..io.encoder import available_encoders
@@ -361,6 +370,11 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--control", default="both", choices=["none", "shuffled", "both"])
     rv.add_argument("--json", default="")
     rv.set_defaults(fn=cmd_reservoir)
+
+    dm = sub.add_parser("demo", help="serve the desk-fly web demo (placeholder backend)")
+    dm.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to expose on the network")
+    dm.add_argument("--port", type=int, default=8000)
+    dm.set_defaults(fn=cmd_demo)
 
     sub.add_parser("rules", help="list registered rules/encoders/decoders/selectors").set_defaults(fn=cmd_rules)
     return ap

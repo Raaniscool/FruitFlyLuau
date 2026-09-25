@@ -69,6 +69,23 @@ python scripts/inspect_fafb.py --dir "$env:FAFB_DATA_PATH" --deep --write-profil
    loader then prefers over its built-in aliases — no code edit needed.
 4. `python -m fruitfly stats --mode small` then `python -m fruitfly run -e exp003_pattern ...`.
 
+## The desk-fly demo
+
+```bash
+python -m fruitfly demo            # then open http://127.0.0.1:8000
+```
+
+A fly at a desk; you ask for Luau; it types. **The default backend is a hand-written
+snippet library — a lookup table with no learning and no connection to the simulated
+network.** The page says so in a banner above the output, on every response, and in the
+status panel, because a fly animating while code appears is exactly the thing a viewer
+will misread as "the fly brain wrote this".
+
+The second backend, `connectome`, is the real one. It is **not implemented**, and
+selecting it returns an explicit unavailable message rather than quietly falling back to
+the snippets. When the science produces a decoder, it plugs in here and the banner
+changes. Until then the demo is a shell, and it says which one it is.
+
 ## Where this is going
 
 The stated long-term question — how far a brain-derived network can be pushed toward

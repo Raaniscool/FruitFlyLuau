@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FruitFlyLuau — desk fly</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="banner" id="banner">
+  <strong>Placeholder backend.</strong>
+  <span id="banner-text">The Luau below comes from a hand-written snippet library, not from the
+  simulated fly brain. No neuron influences this text.</span>
+</header>
+
+<main>
+  <section class="panel">
+    <h1>Ask the fly for some Luau</h1>
+
+    <form id="form" autocomplete="off">
+      <input id="prompt" type="text" placeholder="make a kill brick" aria-label="What should the fly write?">
+      <button id="go" type="submit">Ask</button>
+    </form>
+
+    <div class="examples">
+      try:
+      <button class="chip" type="button">make a part</button>
+      <button class="chip" type="button">kill brick</button>
+      <button class="chip" type="button">leaderstats with coins</button>
+      <button class="chip" type="button">tween a part upward</button>
+      <button class="chip" type="button">a gui button</button>
+    </div>
+
+    <label class="backend">
+      backend:
+      <select id="backend">
+        <option value="template">template (placeholder — works)</option>
+        <option value="connectome">connectome (not implemented)</option>
+      </select>
+    </label>
+
+    <pre id="out" class="code" aria-live="polite"><span class="dim">The fly is waiting.</span></pre>
+    <p class="provenance" id="provenance"></p>
+  </section>
+
+  <section class="stage">
+    <div class="fly-wrap" id="flywrap">
+      <img src="/static/fly_desk.png" alt="A cartoon fly sitting at a desk, typing on a laptop" id="fly">
+    </div>
+    <div class="status" id="status">loading project status…</div>
+  </section>
+</main>
+
+<footer>
+  <p>
+    A connectome is a wiring map. Everything here on top of it — neuron dynamics, plasticity,
+    reward — is an artificial computational model, not a biological claim. This window is a
+    user interface; it is not evidence that anything was learned.
+  </p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
