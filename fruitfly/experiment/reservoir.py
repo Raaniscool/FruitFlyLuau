@@ -54,7 +54,7 @@ Honest limits
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 
 import numpy as np
 from scipy import sparse
@@ -174,40 +174,60 @@ def calibrate_drive(
     input_neurons: np.ndarray,
     amplitude: float = 22.0,
     candidates: tuple[float, ...] = (0.0, 2.0, 4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0),
+    gain_candidates: tuple[float, ...] = (1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01),
     target_rate_hz: tuple[float, float] = (5.0, 80.0),
     steps: int = 200,
     seed: int = 0,
 ) -> tuple[float, dict]:
-    """Pick the background current by measurement instead of by guess.
+    """Pick the background current -- and, if needed, the synaptic gain -- by measuring.
 
-    Sweeps ``candidates`` and returns the smallest bias whose mean firing rate
-    falls inside ``target_rate_hz`` -- low enough not to be a saturated seizure,
-    high enough that the network is not silent. Returns ``(bias, trace)`` where
-    ``trace`` records every candidate tried, so the choice is auditable.
+    Two knobs, because one is not enough. Measured on the real mushroom-body subgraph:
+    the LIF parameters were calibrated on a sparse synthetic graph with mean degree 2.6,
+    and the real circuit has mean degree 20.8. At that connectivity the network
+    self-ignites from its own recurrence -- **every** bias candidate including zero gave
+    380-480 Hz, roughly 100x a plausible rate, and the network is saturated rather than
+    computing. Sweeping the bias alone could not fix that, so the gain is swept too.
+
+    Returns ``(bias, trace)``. ``trace["gain_scale"]`` is the multiplier that must be
+    applied to ``synaptic_gain``; ``trace["saturated"]`` is True if nothing worked, and
+    in that case every downstream number describes a saturated network and must not be
+    read as a property of the wiring.
     """
     rng = np.random.default_rng(seed)
     u = rng.uniform(0.0, 1.0, size=steps)
     lo, hi = target_rate_hz
     tried: list[dict] = []
-    chosen: float | None = None
-    for b in candidates:
-        st = collect_states(sim_factory(), u, input_neurons=input_neurons,
-                            amplitude=amplitude, bias=b, washout=min(40, steps // 4))
-        row = {"bias": float(b), "mean_rate_hz": round(st.mean_rate_hz, 3),
-               "fraction_active": round(st.fraction_active, 4)}
-        tried.append(row)
-        if chosen is None and lo <= st.mean_rate_hz <= hi:
-            chosen = float(b)
-    note = ""
-    if chosen is None:
-        # no candidate landed in range: take the one closest to the window and say so
-        mid = 0.5 * (lo + hi)
-        best = min(tried, key=lambda r: abs(r["mean_rate_hz"] - mid))
-        chosen = best["bias"]
-        note = (f"NO bias produced a mean rate in [{lo}, {hi}] Hz; using the closest "
-                f"({best['mean_rate_hz']} Hz at bias {best['bias']}). Treat the results as "
-                "describing a network outside its useful dynamic range.")
-    return chosen, {"chosen_bias": chosen, "target_rate_hz": [lo, hi], "tried": tried, "note": note}
+
+    def probe(bias: float, gain_scale: float) -> float:
+        sim = sim_factory()
+        if gain_scale != 1.0:
+            sim.p = replace(sim.p, synaptic_gain=sim.p.synaptic_gain * gain_scale)
+        st = collect_states(sim, u, input_neurons=input_neurons,
+                            amplitude=amplitude, bias=bias, washout=min(40, steps // 4))
+        tried.append({"bias": float(bias), "gain_scale": float(gain_scale),
+                      "mean_rate_hz": round(st.mean_rate_hz, 3),
+                      "fraction_active": round(st.fraction_active, 4)})
+        return st.mean_rate_hz
+
+    for gain_scale in gain_candidates:
+        for b in candidates:
+            rate = probe(b, gain_scale)
+            if lo <= rate <= hi:
+                return float(b), {"chosen_bias": float(b), "gain_scale": float(gain_scale),
+                                  "target_rate_hz": [lo, hi], "tried": tried,
+                                  "saturated": False, "note": ""}
+        # if even zero drive is above the window at this gain, more bias cannot help;
+        # drop the gain and try again
+    mid = 0.5 * (lo + hi)
+    best = min(tried, key=lambda r: abs(r["mean_rate_hz"] - mid))
+    note = (f"NO (bias, gain) combination produced a mean rate in [{lo}, {hi}] Hz. Closest was "
+            f"{best['mean_rate_hz']} Hz at bias {best['bias']}, gain x{best['gain_scale']}. "
+            "The network is outside its usable dynamic range and the measurements below do "
+            "NOT describe the wiring.")
+    return float(best["bias"]), {"chosen_bias": float(best["bias"]),
+                                 "gain_scale": float(best["gain_scale"]),
+                                 "target_rate_hz": [lo, hi], "tried": tried,
+                                 "saturated": True, "note": note}
 
 
 # -------------------------------------------------------------------- readout
@@ -454,6 +474,14 @@ class ReservoirReport:
             f"{self.ranks['generalisation_rank']} = {self.ranks['separation_rank']} "
             f"(max possible {self.ranks['max_possible_rank']})",
         ]
+        cal = (self.params or {}).get("drive_calibration") or {}
+        if cal.get("saturated"):
+            lines.append("  *** SATURATED: " + str(cal.get("note", "")).strip())
+            lines.append("  *** The memory/separation/rank numbers above are properties of a "
+                         "saturated network, NOT of the connectome. Do not compare arms.")
+        if self.mean_rate_hz > 150:
+            lines.append(f"  WARNING: {self.mean_rate_hz:.0f} Hz mean rate is far outside any "
+                         "plausible range; treat every number above as uninterpretable.")
         if self.fraction_active < 0.01:
             lines.append("  WARNING: the network is essentially silent. Every number above "
                          "describes a silent network, not the wiring. Raise the drive amplitude.")
@@ -487,12 +515,18 @@ def characterise(
 
     weights_before = np.asarray(conn.matrix.data).copy()
 
+    gain_scale = 1.0
+
     def factory() -> NetworkSimulator:
-        return NetworkSimulator(conn, params, seed=seed)
+        sim = NetworkSimulator(conn, params, seed=seed)
+        if gain_scale != 1.0:
+            sim.p = replace(sim.p, synaptic_gain=sim.p.synaptic_gain * gain_scale)
+        return sim
 
     if bias is None:
         bias, cal = calibrate_drive(factory, input_neurons=input_neurons,
                                     amplitude=amplitude, seed=seed)
+        gain_scale = float(cal.get("gain_scale", 1.0))
     else:
         cal = {"bias": bias, "note": "bias supplied by caller, not calibrated"}
 
@@ -520,6 +554,7 @@ def characterise(
         mean_rate_hz=st.mean_rate_hz, fraction_active=st.fraction_active,
         memory=mc, sep=sep, ranks=ranks, control=control_note,
         params={"steps": steps, "washout": washout, "max_delay": max_delay,
-                "amplitude": amplitude, "bias": bias, "drive_calibration": cal, "seed": seed,
+                "amplitude": amplitude, "bias": bias, "gain_scale": gain_scale,
+                "drive_calibration": cal, "seed": seed,
                 "n_sep_pairs": n_sep_pairs, "n_rank_streams": n_rank_streams},
     )

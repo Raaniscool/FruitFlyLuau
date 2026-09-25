@@ -194,3 +194,62 @@ def test_cli_reservoir_runs_both_arms_and_writes_json(tmp_path, sample_dir):
     rows = json.loads(out.read_text())
     assert len(rows) == 2, "default --control both must report real AND shuffled wiring"
     assert rows[0]["control"] != rows[1]["control"]
+
+
+@pytest.fixture()
+def dense_recurrent_connectome():
+    """Mean degree ~21, matching the real mushroom-body subgraph (6,237 edges / 300 cells).
+
+    The LIF parameters were calibrated on a synthetic graph with mean degree 2.6. On the
+    real circuit the network self-ignited: every bias candidate including zero produced
+    380-480 Hz, ~100x any plausible rate.
+    """
+    from scipy import sparse
+
+    from fruitfly.graph.connectome import Connectome
+
+    rng = np.random.default_rng(0)
+    n, m = 300, 6237
+    rows = rng.integers(0, n, m)
+    cols = rng.integers(0, n, m)
+    w = rng.uniform(1.8, 7.5, m)
+    adj = sparse.csr_matrix((w, (rows, cols)), shape=(n, n))
+    return Connectome(root_ids=np.arange(n, dtype=np.int64) + 720575940600000000, matrix=adj)
+
+
+def test_a_dense_graph_is_brought_into_range_by_lowering_the_gain(dense_recurrent_connectome):
+    """Sweeping the background current alone cannot fix runaway recurrence."""
+    cfg = AppConfig.load()
+    rep = characterise(dense_recurrent_connectome, cfg.lif, input_neurons=np.arange(16),
+                       steps=300, washout=60, max_delay=5, seed=1,
+                       n_sep_pairs=1, n_rank_streams=3)
+    assert rep.params["gain_scale"] < 1.0, "a dense recurrent graph needs the gain reduced"
+    assert 1.0 <= rep.mean_rate_hz <= 120.0, (
+        f"calibration left the network at {rep.mean_rate_hz:.0f} Hz, outside any usable range"
+    )
+    assert not rep.params["drive_calibration"]["saturated"]
+
+
+def test_an_untameable_network_is_declared_uninterpretable(dense_recurrent_connectome):
+    """If calibration fails, the report must say the numbers are not about the wiring."""
+    cfg = AppConfig.load()
+    # force the failure: pin bias high and forbid the gain sweep from running
+    rep = characterise(dense_recurrent_connectome, cfg.lif, input_neurons=np.arange(16),
+                       steps=200, washout=40, max_delay=3, seed=1, bias=40.0,
+                       amplitude=80.0, n_sep_pairs=1, n_rank_streams=3)
+    text = rep.describe()
+    if rep.mean_rate_hz > 150:
+        assert "uninterpretable" in text, (
+            f"{rep.mean_rate_hz:.0f} Hz was reported without a health warning:\n{text}"
+        )
+
+
+def test_calibration_trace_records_both_knobs(dense_recurrent_connectome):
+    cfg = AppConfig.load()
+    bias, trace = calibrate_drive(
+        lambda: NetworkSimulator(dense_recurrent_connectome, cfg.lif, seed=1),
+        input_neurons=np.arange(16), steps=150,
+    )
+    assert trace["tried"], "the sweep must be auditable"
+    assert all({"bias", "gain_scale", "mean_rate_hz"} <= set(r) for r in trace["tried"])
+    assert "gain_scale" in trace and "saturated" in trace
