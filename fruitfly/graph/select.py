@@ -160,7 +160,9 @@ def _mushroom_body(ctx: SelectionContext) -> np.ndarray:
     NOT mean the model learns the way the fly does -- the dynamics and the plasticity
     rule remain our inventions.
 
-    kwargs: ``classes`` (default the four above), ``n`` (cap, sampled with ctx.rng).
+    kwargs: ``classes`` (default the four above), ``n`` (cap), ``sample`` --
+    "connected" (default; greedy densest connected subgraph within the circuit) or
+    "random" (an explicit baseline that is mostly isolated cells).
     """
     classes = ctx.kwargs.get("classes") or ["Kenyon_Cell", "MBON", "MBIN", "DAN"]
     mask = ctx.match("classification.class", classes)
@@ -171,10 +173,77 @@ def _mushroom_body(ctx: SelectionContext) -> np.ndarray:
             "without it the class column is unavailable and nothing can be selected by cell class."
         )
         return idx
+    total = idx.size
     k = int(ctx.kwargs.get("n", 0))
-    if k and idx.size > k:
-        idx = ctx.rng.choice(idx, size=k, replace=False)
-    return idx
+    if not k or total <= k:
+        log.info("mushroom_body: %d neurons selected (no cap applied)", total)
+        return np.sort(idx)
+
+    how = str(ctx.kwargs.get("sample", "connected")).lower()
+    if how == "random":
+        # kept as an explicit, honest baseline: a random k of the circuit is mostly
+        # disconnected, because the MB is sparse and k is small relative to it.
+        picked = ctx.rng.choice(idx, size=k, replace=False)
+        log.warning(
+            "mushroom_body: random sample of %d/%d neurons -- expect most of them to be "
+            "isolated. Use sample='connected' for a graph that can carry activity.", k, total,
+        )
+        return np.sort(picked)
+
+    picked = _densest_connected_within(ctx, idx, k)
+    log.info("mushroom_body: %d/%d neurons, grown as a connected subgraph within the circuit",
+             picked.size, total)
+    return picked
+
+
+def _densest_connected_within(ctx: SelectionContext, members: np.ndarray, k: int) -> np.ndarray:
+    """Grow a connected set of <=k nodes using ONLY edges internal to ``members``.
+
+    Why this is needed, measured: the mushroom body has roughly 5k neurons spread over
+    Kenyon cells, MBONs, DANs and MBINs. A uniform random 100 of them shares almost no
+    edges -- the first real run produced 36 edges and 62 isolated neurons out of 100,
+    which cannot carry activity no matter what the dynamics are.
+
+    Strategy: restrict the adjacency to ``members``, start from the highest internal-degree
+    node, and repeatedly add the candidate with the most edges to the set already chosen
+    (a greedy densest-subgraph expansion). Ties are broken by the context rng, so the
+    result is seeded and reproducible.
+    """
+    if ctx.adjacency is None:
+        log.warning("no adjacency available; falling back to a random sample of the circuit")
+        return np.sort(ctx.rng.choice(members, size=k, replace=False))
+
+    sub = ctx.adjacency[members][:, members].tocsr()
+    sym = (sub + sub.T).tocsr()          # connectivity, direction-agnostic for growth
+    deg = np.asarray((sym != 0).sum(axis=1)).ravel()
+    if deg.max(initial=0) == 0:
+        log.warning("the selected circuit has no internal edges at all; returning a random sample")
+        return np.sort(ctx.rng.choice(members, size=k, replace=False))
+
+    start = int(np.argmax(deg))
+    chosen = [start]
+    in_set = np.zeros(members.size, dtype=bool)
+    in_set[start] = True
+    # score[i] = number of edges from candidate i into the chosen set
+    score = np.asarray(sym[:, start].todense()).ravel().astype(np.int64)
+    score[start] = -1
+
+    while len(chosen) < k:
+        best = int(np.argmax(score))
+        if score[best] <= 0:
+            # the connected component is exhausted; restart from the best unused node
+            remaining = np.flatnonzero(~in_set)
+            if remaining.size == 0:
+                break
+            best = int(remaining[np.argmax(deg[remaining])])
+            if deg[best] == 0:
+                break
+        in_set[best] = True
+        chosen.append(best)
+        score += np.asarray(sym[:, best].todense()).ravel().astype(np.int64)
+        score[in_set] = -1
+
+    return np.sort(members[np.asarray(chosen, dtype=np.int64)])
 
 
 @register("visual")

@@ -408,3 +408,95 @@ def test_cache_filenames_differ_per_data_directory(tmp_path):
         loader_mod.load_connections = real
 
     assert len(seen) == 2 and seen[0] != seen[1], f"cache paths collided: {seen}"
+
+
+@pytest.fixture()
+def circuit_graph():
+    """A sparse graph with a labelled circuit whose edges are concentrated in a core.
+
+    Shaped like the real situation measured on FAFB: ~500 annotated cells of one class,
+    but their internal connectivity is concentrated, so a uniform sample of them is
+    mostly isolated.
+    """
+    from scipy import sparse
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    ids = np.sort(720575940600000000 + rng.choice(10 ** 7, size=n, replace=False)).astype(np.int64)
+    cls = np.array(["other"] * n, dtype=object)
+    members = rng.choice(n, size=500, replace=False)
+    cls[members] = "Kenyon_Cell"
+    core = members[:300]
+    rows, cols = [], []
+    for _ in range(2500):
+        a, b = rng.choice(core, size=2, replace=False)
+        rows.append(a)
+        cols.append(b)
+    for _ in range(8000):
+        rows.append(int(rng.integers(n)))
+        cols.append(int(rng.integers(n)))
+    adj = sparse.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
+    return ids, adj, {"classification.class": cls}
+
+
+def _subgraph_shape(adj, idx):
+    sub = adj[idx][:, idx]
+    deg = np.asarray(((sub + sub.T) != 0).sum(axis=1)).ravel()
+    return sub.nnz, int((deg == 0).sum())
+
+
+def test_mushroom_body_connected_sampling_beats_random_sampling(circuit_graph):
+    """The first real run gave 36 edges and 62 isolated neurons out of 100.
+
+    A uniform random sample of a sparse circuit cannot carry activity, whatever the
+    dynamics are. Growing a connected subgraph within the circuit fixes it, and this
+    test pins the difference rather than trusting that it helped.
+    """
+    from fruitfly.graph.select import select_population
+
+    ids, adj, meta = circuit_graph
+    out = {}
+    for how in ("random", "connected"):
+        idx = select_population("mushroom_body", ids=ids, adjacency=adj, metadata=meta,
+                                rng=np.random.default_rng(1), kwargs={"n": 100, "sample": how})
+        assert idx.size == 100
+        out[how] = _subgraph_shape(adj, idx)
+
+    assert out["connected"][1] == 0, f"connected sampling left isolated neurons: {out}"
+    assert out["connected"][0] > 4 * out["random"][0], (
+        f"connected sampling must yield a far denser subgraph: {out}"
+    )
+
+
+def test_mushroom_body_connected_sampling_is_seeded_and_reproducible(circuit_graph):
+    from fruitfly.graph.select import select_population
+
+    ids, adj, meta = circuit_graph
+    runs = [
+        select_population("mushroom_body", ids=ids, adjacency=adj, metadata=meta,
+                          rng=np.random.default_rng(7), kwargs={"n": 60})
+        for _ in range(2)
+    ]
+    assert np.array_equal(runs[0], runs[1])
+
+
+def test_mushroom_body_returns_everything_when_under_the_cap(circuit_graph):
+    from fruitfly.graph.select import select_population
+
+    ids, adj, meta = circuit_graph
+    idx = select_population("mushroom_body", ids=ids, adjacency=adj, metadata=meta,
+                            rng=np.random.default_rng(0), kwargs={"n": 5000})
+    assert idx.size == 500, "no cap should be applied when the circuit is smaller than n"
+
+
+def test_mushroom_body_survives_a_circuit_with_no_internal_edges(circuit_graph):
+    """Degenerate but possible: annotated cells that never talk to each other."""
+    from scipy import sparse
+
+    from fruitfly.graph.select import select_population
+
+    ids, _adj, meta = circuit_graph
+    empty = sparse.csr_matrix((ids.size, ids.size))
+    idx = select_population("mushroom_body", ids=ids, adjacency=empty, metadata=meta,
+                            rng=np.random.default_rng(0), kwargs={"n": 40})
+    assert idx.size == 40, "it must still return a population, with a warning, not crash"
