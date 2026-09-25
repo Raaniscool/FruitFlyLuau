@@ -320,3 +320,91 @@ def test_mushroom_body_selection_fails_loudly_without_the_classification_file(ca
     assert any("classification" in r.message for r in caplog.records), (
         "an empty selection must name the file that would have made it non-empty"
     )
+
+
+def test_cache_from_one_data_dir_is_never_served_for_another(tmp_path, sample_dir):
+    """Reproduces a real failure: `stats --data-dir <real FAFB>` returned 529 edges.
+
+    The cache filename was keyed only on loader options, so a table derived from
+    data/sample/fafb_v783 was served for a completely different directory that happened
+    to contain a file of the same name. The user's 3.7-million-edge download was
+    silently replaced by a 529-edge synthetic graph -- and nothing in the output said so
+    except the edge count.
+    """
+    from fruitfly.dataset.loader import load_connections
+
+    # two directories, same filename, different contents
+    dir_a = tmp_path / "sample"
+    dir_b = tmp_path / "real"
+    for d in (dir_a, dir_b):
+        d.mkdir()
+    name = "connections_princeton.csv.gz"
+    (dir_a / name).write_bytes((sample_dir / name).read_bytes())
+
+    rows = ["pre_root_id,post_root_id,neuropil,syn_count,nt_type"]
+    for i in range(50):
+        rows.append(f"{720575940600000000 + i},{720575940600000100 + i},MB_R,{i + 5},ACH")
+    with gzip.open(dir_b / name, "wt", encoding="utf-8") as fh:
+        fh.write("\n".join(rows) + "\n")
+
+    cache = tmp_path / "cache" / "shared.npz"
+    a = load_connections(dir_a, cache_path=cache)
+    b = load_connections(dir_b, cache_path=cache)
+
+    assert b.pre.size == 50, (
+        f"got {b.pre.size} edges for dir_b but it only has 50 rows -- the cache from "
+        f"dir_a ({a.pre.size} edges) was served for a different directory"
+    )
+    assert "720575940600000000" in str(b.pre[0]) or b.pre[0] > 0
+
+
+def test_a_cache_without_provenance_is_rejected_not_trusted(tmp_path, sample_dir):
+    """Caches written before the provenance fields existed must not be believed."""
+    import numpy as np
+
+    from fruitfly.dataset.loader import _cache_is_stale
+
+    src = sample_dir / "connections_princeton.csv.gz"
+    old_style = tmp_path / "old.npz"
+    np.savez(old_style, pre=np.array([1, 2]), post=np.array([3, 4]))
+    assert "no source provenance" in _cache_is_stale(old_style, src)
+
+    good = tmp_path / "good.npz"
+    np.savez(good, source_path=np.asarray([str(src.resolve())]),
+             source_size=np.asarray([src.stat().st_size]))
+    assert _cache_is_stale(good, src) == ""
+
+    wrong_size = tmp_path / "wrong.npz"
+    np.savez(wrong_size, source_path=np.asarray([str(src.resolve())]),
+             source_size=np.asarray([src.stat().st_size + 1]))
+    assert "changed size" in _cache_is_stale(wrong_size, src)
+
+
+def test_cache_filenames_differ_per_data_directory(tmp_path):
+    """The key must include the directory, so two downloads cannot collide."""
+    from fruitfly.config import AppConfig
+    from fruitfly.graph.build import _load_table
+
+    seen = []
+
+    def fake_loader(data_dir, **kw):
+        seen.append(kw["cache_path"])
+        raise RuntimeError("stop here; we only want the cache path")
+
+    import fruitfly.dataset.loader as loader_mod
+
+    real = loader_mod.load_connections
+    loader_mod.load_connections = fake_loader
+    try:
+        cfg = AppConfig.load()
+        cfg.data.use_cache = True
+        for d in (tmp_path / "one", tmp_path / "two"):
+            d.mkdir()
+            try:
+                _load_table(cfg, d, None)
+            except RuntimeError:
+                pass
+    finally:
+        loader_mod.load_connections = real
+
+    assert len(seen) == 2 and seen[0] != seen[1], f"cache paths collided: {seen}"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,7 +90,14 @@ def _load_table(cfg: AppConfig, data_dir: Path | None, inventory: DatasetInvento
         cache = Path(cfg.data.cache_dir)
         if not cache.is_absolute():
             cache = Path(__file__).resolve().parents[2] / cache
-        cache = cache / f"{cfg.data.source}_{cfg.data.max_rows or 'all'}_min{cfg.data.min_synapses_per_pair}.npz"
+        # include the data directory in the KEY, not just the loader options: the same
+        # filename exists in data/sample and in a real download, and they are not
+        # interchangeable. loader._cache_is_stale() verifies this again on read.
+        dir_key = hashlib.sha256(str(Path(data_dir).resolve()).encode("utf-8")).hexdigest()[:10]
+        cache = cache / (
+            f"{cfg.data.source}_{cfg.data.max_rows or 'all'}"
+            f"_min{cfg.data.min_synapses_per_pair}_{dir_key}.npz"
+        )
     return load_connections(
         data_dir,
         source=cfg.data.source,

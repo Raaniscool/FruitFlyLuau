@@ -144,6 +144,30 @@ def _read_chunks(path: Path, columns: dict[str, str], chunksize: int) -> tuple[p
     return df, time.perf_counter() - t0
 
 
+
+def _cache_is_stale(cache: Path, path: Path) -> str:
+    """Return a human reason the cache must not be used, or '' if it is valid.
+
+    Guards against the cache being keyed loosely enough that a table derived from one
+    data directory is served for another. Caches written before this check existed
+    carry no provenance and are rejected rather than trusted.
+    """
+    try:
+        with np.load(cache, allow_pickle=False) as z:
+            if "source_path" not in z.files or "source_size" not in z.files:
+                return "written by an older version with no source provenance"
+            cached_path = str(z["source_path"][0])
+            cached_size = int(z["source_size"][0])
+    except Exception as exc:  # unreadable cache is a cache miss, never a crash
+        return f"unreadable ({exc.__class__.__name__})"
+    if cached_path != str(path.resolve()):
+        return f"derived from a different file ({cached_path})"
+    actual = path.stat().st_size
+    if cached_size != actual:
+        return f"source file changed size ({cached_size:,} -> {actual:,} bytes)"
+    return ""
+
+
 def load_connections(
     data_dir: str | Path,
     *,
@@ -181,6 +205,20 @@ def load_connections(
 
     cache = Path(cache_path) if cache_path else None
     if cache is not None and cache.is_file() and cache.stat().st_mtime > path.stat().st_mtime:
+        # A cache is only valid for the EXACT file it was derived from. The filename
+        # alone is not enough: two data directories can both hold
+        # connections_princeton.csv.gz (e.g. data/sample/ and the real download), and
+        # serving one for the other silently substitutes a 529-edge synthetic graph
+        # for a 3.7-million-edge real one. Verify path and size before trusting it.
+        stale = _cache_is_stale(cache, path)
+        if stale:
+            log.warning("ignoring derived cache %s: %s", cache.name, stale)
+            cache_invalid = True
+        else:
+            cache_invalid = False
+    else:
+        cache_invalid = True
+    if cache is not None and not cache_invalid:
         t0 = time.perf_counter()
         with np.load(cache, allow_pickle=False) as z:
             table = ConnectionTable(
@@ -334,6 +372,8 @@ def load_connections(
         payload["n_rows"] = np.asarray(table.n_rows)
         payload["n_unique_ids"] = np.asarray(table.n_unique_ids)
         payload["source_file"] = np.asarray([table.source_file])
+        payload["source_path"] = np.asarray([str(path.resolve())])
+        payload["source_size"] = np.asarray([path.stat().st_size])
         payload["container"] = np.asarray([table.container])
         np.savez(cache, **payload)
         log.info("wrote derived cache %s (%s)", cache.name, human_bytes(cache.stat().st_size))
