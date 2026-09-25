@@ -280,8 +280,13 @@ def test_standalone_inspection_script_runs_on_a_plain_python(tmp_path, sample_fa
 def test_standalone_inspection_script_explains_an_empty_dir(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "inspect_fafb.py"), "--dir", str(empty)],
-                          capture_output=True, text=True, timeout=120)
+    # --out AND cwd are both pinned into tmp_path on purpose: with the default
+    # --out the script writes fafb_schema_report.{md,json} relative to the working
+    # directory, so an unpinned test run inside a checkout DESTROYS the user's real
+    # report. That happened once; see the guard fixture in conftest.py.
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "inspect_fafb.py"),
+                           "--dir", str(empty), "--out", str(tmp_path / "empty_report")],
+                          capture_output=True, text=True, timeout=120, cwd=str(tmp_path))
     assert proc.returncode in (0, 2)
     combined = (proc.stdout + proc.stderr).lower()
     assert "no files" in combined or "not found" in combined or "empty" in combined

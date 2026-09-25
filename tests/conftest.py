@@ -93,3 +93,28 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def _no_test_may_write_reports_into_the_checkout():
+    """Guard: the test suite must never create artefacts in the repository root.
+
+    A test that ran `scripts/inspect_fafb.py` without pinning --out once overwrote a
+    user's real `fafb_schema_report.md` with a report of an empty tmp directory --
+    silently, because the script writes relative to the working directory. Any test
+    that produces one of these names in the checkout now fails loudly instead.
+    """
+    root = Path(__file__).resolve().parents[1]
+    watched = ("fafb_schema_report.md", "fafb_schema_report.json",
+               "config/fafb_profile.yaml", "config/fafb_profile.json")
+    before = {name: (root / name).exists() for name in watched}
+    yield
+    created = [name for name in watched if (root / name).exists() and not before[name]]
+    if created:
+        for name in created:
+            (root / name).unlink()
+        raise AssertionError(
+            "a test wrote " + ", ".join(created) + " into the repository root. "
+            "Pass --out (and cwd=tmp_path) when invoking scripts/inspect_fafb.py: "
+            "these files belong to the user and overwriting them destroys real data."
+        )
