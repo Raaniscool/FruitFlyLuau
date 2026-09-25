@@ -1,0 +1,107 @@
+# FruitFlyLuau default configuration.
+# Machine-local overrides go in config/local.yaml (git-ignored) or $FAFB_DATA_PATH.
+# Every key here is mirrored by a dataclass in fruitfly/config.py; unknown keys are
+# reported rather than silently ignored.
+
+data:
+  # Where the downloaded FAFB v783 assets live. Leave empty to let the project
+  # discover it ($FAFB_DATA_PATH -> config/local.yaml -> .fafb_path -> ~/Downloads, etc).
+  fafb_data_path: ""
+  source: connections_filtered        # Connections (Filtered) -- 68 MB, the default graph source
+  min_synapses_per_pair: 1            # the filtered asset is already 5+ total synapses per pair
+  max_rows: 0                         # >0 caps rows read (fast laptop smoke tests)
+  read_chunksize: 1000000
+  use_cache: true
+  cache_dir: data/derived
+
+graph:
+  mode: tiny                          # tiny | small | medium | large | full | sample
+  n_neurons: 100
+  selection: connected_subgraph       # random | hubs | manual | neuron_type | neurotransmitter |
+                                      # visual | upstream_of | downstream_of | connected_subgraph | all
+  selection_kwargs: {}
+  weight_transform: log1p             # none | log1p | sqrt | zscore
+  weight_scale: 1.0
+  ei_mode: nt                         # nt = sign from predicted transmitter; all_exc = ignore signs
+  counterbalance_init: true           # adopt the readout mapping the untrained network is WORST at
+  counterbalance_probe_items: 24
+  counterbalance_maximize: false
+
+lif:
+  dt_ms: 0.5
+  tau_ms: 6.0
+  v_rest: -62.0
+  v_thresh: -52.0
+  v_reset: -62.0
+  refractory_ms: 2.0
+  leak: 1.0
+  synaptic_gain: 2.0
+  tau_syn_ms: 2.0
+  reversal_mode: current
+  noise: 0.0
+  background_current: 0.0
+  adaptation: 0.0
+  clip_v: 40.0
+
+plasticity:
+  rule: reward_stdp                   # stdp | reward_stdp | hebbian | none
+  eta: 0.003
+  a_plus: 0.2
+  a_minus: 0.31
+  tau_plus_ms: 20.0
+  tau_minus_ms: 20.0
+  tau_trace_ms: 40.0
+  w_min: null
+  w_max: 8.0
+  polarity_lock: true
+  weight_decay: 0.0
+  normalize: colsum                   # none | rowsum | colsum | both
+  center_eligibility: true
+  plastic_targets: output             # all | output
+  plastic_fraction: 1.0
+  seed: 1234
+
+reward:
+  positive: 1.0
+  negative: -1.0
+  neutral: 0.0
+  delay_steps: 0
+  trace_decay: 0.9
+  trace_tau_ms: 60.0
+  value_abs_max: 4.0
+  penalize_no_response: true
+  baseline_subtract: false            # RPE flavour; collapses the signal on constant outcomes
+  credit_mode: auto                   # auto | online | end_of_trial
+  max_history: 10000
+
+train:
+  episodes: 200
+  steps_per_trial: 0                  # 0 = use the environment's trial_steps (48, calibrated)
+  batch_trials: 1
+  eval_every: 20
+  eval_trials: 48
+  seed: 7
+  log_dir: runs
+  save_checkpoints: true
+  checkpoint_every: 50
+  keep_last: 3
+  early_stop_accuracy: 0.99
+  post_steps: -1
+  control: ""                         # "" | no_plasticity | shuffled_wiring | sham_reward
+  window: 25
+  max_wallclock_minutes: 0
+  device: cpu
+
+viz:
+  enabled: true
+  dpi: 110
+  max_edges_drawn: 4000
+  activity_raster_neurons: 40
+
+luau:
+  enabled: false                      # phases 7+ only; nothing in exp001-005 reads this
+  tokenizer: luau-v0
+  vocab_max: 4000
+  eval_timeout_s: 2.0
+  eval_mem_mb: 256
+  sandbox: none

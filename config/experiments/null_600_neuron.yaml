@@ -1,0 +1,53 @@
+# The "Set A" configuration behind the 18-run null table in EXPERIMENTS.md.
+#
+#   fruitfly run --config config/experiments/null_600_neuron.yaml
+#   python scripts/sweep_plasticity.py            # all 18 rows (about 6 min)
+#
+# Same as exp001_binary_sample.yaml with a bigger population and a longer run:
+# 600 neurons, 400 episodes. Expected: learning_detected=false, and this is the
+# configuration where we looked hardest for a positive result (9 plasticity
+# settings x 2 tasks). Do not "fix" the null by editing this file; the diagnosis
+# in EXPERIMENTS.md is the finding.
+
+name: null_600_neuron
+experiment: exp001_binary
+notes: >-
+  Larger population, longer training, counterbalanced readout. |dW| grows with the
+  plasticity knobs while held-out accuracy stays at chance; that dissociation is the
+  measured result.
+
+data:
+  source: connections_filtered
+
+graph:
+  mode: sample
+  n_neurons: 600
+  selection: connected_subgraph
+  weight_transform: log1p
+  counterbalance_init: true
+
+plasticity:
+  rule: reward_stdp
+  eta: 0.003
+  normalize: colsum
+  center_eligibility: true
+  plastic_targets: output
+  w_max: 8.0
+
+reward:
+  credit_mode: auto
+  trace_tau_ms: 60.0
+
+lif:
+  noise: 0.8
+  background_current: 1.5
+
+train:
+  episodes: 400
+  eval_trials: 48
+  eval_every: 50
+  seed: 1
+  checkpoint_every: 200
+
+viz:
+  enabled: false

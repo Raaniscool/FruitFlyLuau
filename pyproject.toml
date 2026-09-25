@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fruitflyluau"
+version = "0.1.0"
+description = "Connectome-grounded spiking neural simulation over the FlyWire FAFB v783 Drosophila brain, trained with reinforcement + synaptic plasticity. Goal: measure how far it can be pushed toward learning Luau."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Scientific honesty: this is a computational abstraction of a structural
+# wiring diagram. It is not a digital fruit fly and makes no biological or
+# consciousness equivalence claims. See LIMITATIONS.md.
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# pyarrow is only needed for feather/parquet static snapshots (e.g. Zenodo).
+feather = ["pyarrow>=14.0"]
+viz = ["matplotlib>=3.7"]
+dev = ["pytest>=7.4", "matplotlib>=3.7"]
+
+[project.scripts]
+fruitfly = "fruitfly.cli.__main__:main"
+
+# find-style, not an explicit list: an explicit list went stale (it named
+# fruitfly.experiment.tasks, which is a module, and `pip install .` failed on it).
+[tool.setuptools.packages.find]
+include = ["fruitfly*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

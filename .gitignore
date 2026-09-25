@@ -1,0 +1,60 @@
+# ---- NEVER commit the large FAFB v783 assets (see DATA.md) -----------------
+# The repository stores code, config, tests, docs and tiny sample data only.
+*.csv
+*.csv.gz
+*.tsv
+*.tsv.gz
+*.feather
+*.parquet
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.swc
+*.zip
+data/raw/
+data/fafb/
+data/derived/
+!data/sample/
+!data/sample/**
+!tests/fixtures/**/*.csv.gz
+
+# ---- generated reports (regenerate with scripts/inspect_fafb.py) ------------
+fafb_schema_report.md
+fafb_schema_report.json
+
+# ---- experiment outputs -----------------------------------------------------
+runs/
+checkpoints/
+artifacts/
+*.log
+
+# ---- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- local overrides / user machines ---------------------------------------
+config/local.yaml
+config/fafb_profile.yaml
+config/fafb_profile.json
+config/local.json
+.fafb_path
+.env
+
+# ---- editors / os ------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+fafb_report_real.*
