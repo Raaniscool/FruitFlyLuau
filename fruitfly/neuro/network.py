@@ -93,6 +93,7 @@ class NetworkSimulator:
         self.g = np.zeros(self.n, dtype=np.float64)  # signed synaptic drive state
         self.adapt = np.zeros(self.n, dtype=np.float64)
         self.refractory = np.zeros(self.n, dtype=np.int32)
+        self.inhibition = 0.0  # pooled APL-like inhibitory state (scalar)
         self._spikes = np.zeros(self.n, dtype=np.float32)
         self.spike_count = np.zeros(self.n, dtype=np.int64)
         self.last_spike_step = np.full(self.n, -1, dtype=np.int64)
@@ -129,6 +130,14 @@ class NetworkSimulator:
             i_ext_arr = i_ext_arr + p.background_current
 
         # 4) leak + integrate
+        # APL-like pooled inhibition: one scalar driven by how much of the population
+        # just fired, subtracted from every neuron. Applied before integration so it can
+        # actually prevent the next volley rather than react to it.
+        if p.global_inhibition > 0.0:
+            decay_inh = np.exp(-p.dt_ms / max(p.inhibition_tau_ms, 1e-6))
+            self.inhibition = self.inhibition * decay_inh + float(s_prev.mean())
+            i_syn = i_syn - p.global_inhibition * self.inhibition
+
         d = (p.dt_ms / p.tau_ms) * (-p.leak * (self.v - p.v_rest) + i_syn + i_ext_arr)
         self.v += d
         if p.clip_v:

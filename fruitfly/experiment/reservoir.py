@@ -75,6 +75,7 @@ __all__ = [
     "memory_capacity",
     "separation",
     "rank_measures",
+    "branching_ratio",
     "shuffle_connectome",
     "characterise",
 ]
@@ -92,6 +93,9 @@ class ReservoirStates:
     readout_neurons: np.ndarray
     fraction_active: float
     mean_rate_hz: float
+    #: spikes per timestep, used for the branching ratio. Defaulted so a caller can
+    #: construct states by hand (the metric tests do) without inventing spike trains.
+    pop_spikes: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     @property
     def n_steps(self) -> int:
@@ -139,6 +143,7 @@ def collect_states(
     decay = float(np.exp(-1.0 / max(trace_tau_steps, 1e-6)))
     trace = np.zeros(sim.n, dtype=np.float64)
     X = np.empty((n_steps, idx_out.size), dtype=np.float64)
+    pop = np.zeros(n_steps, dtype=np.float64)
     i_ext = np.zeros(sim.n, dtype=np.float64)
     ever = np.zeros(sim.n, dtype=bool)
     n_spikes = 0
@@ -150,6 +155,7 @@ def collect_states(
         trace *= decay
         trace += s
         X[t] = trace[idx_out]
+        pop[t] = float(s.sum())
         ever |= s > 0
         n_spikes += int(s.sum())
 
@@ -157,6 +163,7 @@ def collect_states(
     states = ReservoirStates(
         X=X[washout:],
         u=signal[washout:],
+        pop_spikes=pop[washout:],
         washout=washout,
         input_neurons=idx_in,
         readout_neurons=idx_out,
@@ -175,21 +182,33 @@ def calibrate_drive(
     amplitude: float = 22.0,
     candidates: tuple[float, ...] = (0.0, 2.0, 4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0),
     gain_candidates: tuple[float, ...] = (1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01),
+    inhibition_candidates: tuple[float, ...] = (0.0, 20.0, 60.0, 120.0),
     target_rate_hz: tuple[float, float] = (5.0, 80.0),
     steps: int = 200,
     seed: int = 0,
 ) -> tuple[float, dict]:
     """Pick the background current -- and, if needed, the synaptic gain -- by measuring.
 
-    Two knobs, because one is not enough. Measured on the real mushroom-body subgraph:
+    Three knobs, because one was not enough and two still were not. Measured on the real mushroom-body subgraph:
     the LIF parameters were calibrated on a sparse synthetic graph with mean degree 2.6,
     and the real circuit has mean degree 20.8. At that connectivity the network
     self-ignites from its own recurrence -- **every** bias candidate including zero gave
     380-480 Hz, roughly 100x a plausible rate, and the network is saturated rather than
     computing. Sweeping the bias alone could not fix that, so the gain is swept too.
 
-    Returns ``(bias, trace)``. ``trace["gain_scale"]`` is the multiplier that must be
-    applied to ``synaptic_gain``; ``trace["saturated"]`` is True if nothing worked, and
+    The third knob is ``global_inhibition``, an APL-like pooled inhibitory feedback.
+    Measured on a graph matched to the real subgraph (all-excitatory, mean degree 20.8):
+    with no inhibition the network only ever sits at 474 Hz / 100% active or 9 Hz / 7%
+    active -- there is no middle. At inhibition 60 it reaches 82 Hz with a branching
+    ratio of 0.98, i.e. an actually near-critical regime. The knob exists because the
+    subgraph is missing the fly's own inhibition, not to make results look better.
+
+    Among settings whose firing rate is acceptable, the one with branching ratio closest
+    to 1 is chosen: rate alone cannot tell "18 driven cells and dead recurrence" from
+    "a network propagating activity".
+
+    Returns ``(bias, trace)``. ``trace["gain_scale"]`` multiplies ``synaptic_gain``,
+    ``trace["global_inhibition"]`` sets the pooled inhibition; ``trace["saturated"]`` is True if nothing worked, and
     in that case every downstream number describes a saturated network and must not be
     read as a property of the wiring.
     """
@@ -198,24 +217,48 @@ def calibrate_drive(
     lo, hi = target_rate_hz
     tried: list[dict] = []
 
-    def probe(bias: float, gain_scale: float) -> float:
+    def probe(bias: float, gain_scale: float, inhibition: float) -> float:
         sim = sim_factory()
-        if gain_scale != 1.0:
-            sim.p = replace(sim.p, synaptic_gain=sim.p.synaptic_gain * gain_scale)
+        sim.p = replace(sim.p,
+                        synaptic_gain=sim.p.synaptic_gain * gain_scale,
+                        global_inhibition=inhibition)
         st = collect_states(sim, u, input_neurons=input_neurons,
                             amplitude=amplitude, bias=bias, washout=min(40, steps // 4))
+        sigma, _ = branching_ratio(st.pop_spikes)
         tried.append({"bias": float(bias), "gain_scale": float(gain_scale),
+                      "global_inhibition": float(inhibition),
                       "mean_rate_hz": round(st.mean_rate_hz, 3),
-                      "fraction_active": round(st.fraction_active, 4)})
+                      "fraction_active": round(st.fraction_active, 4),
+                      "branching_ratio": None if np.isnan(sigma) else round(sigma, 3)})
         return st.mean_rate_hz
 
-    for gain_scale in gain_candidates:
-        for b in candidates:
-            rate = probe(b, gain_scale)
-            if lo <= rate <= hi:
-                return float(b), {"chosen_bias": float(b), "gain_scale": float(gain_scale),
-                                  "target_rate_hz": [lo, hi], "tried": tried,
-                                  "saturated": False, "note": ""}
+    in_range: list[dict] = []
+    for inhibition in inhibition_candidates:
+        for gain_scale in gain_candidates:
+            for b in candidates:
+                rate = probe(b, gain_scale, inhibition)
+                if lo <= rate <= hi:
+                    in_range.append(tried[-1])
+        # deliberately NOT breaking here: the first inhibition level that merely lands in
+        # the rate window is usually a tiny-gain setting where the recurrence is dead.
+        # Sweep every level and choose globally.
+    if in_range:
+            # among settings with an acceptable firing rate, prefer the one closest to
+            # criticality: rate alone cannot distinguish "18 driven cells and no
+            # recurrence" from "a network actually propagating activity"
+        best = min(in_range, key=lambda r: abs((r.get("branching_ratio") or 0.0) - 1.0))
+        return float(best["bias"]), {
+            "chosen_bias": float(best["bias"]),
+            "gain_scale": float(best["gain_scale"]),
+            "global_inhibition": float(best.get("global_inhibition", 0.0)),
+            "branching_ratio": best.get("branching_ratio"),
+            "target_rate_hz": [lo, hi], "tried": tried,
+            "saturated": False,
+            "note": "" if abs((best.get("branching_ratio") or 0.0) - 1.0) <= 0.15 else
+                    (f"best available branching ratio is {best.get('branching_ratio')}, "
+                     "not near 1: the network is in range by firing rate but is not "
+                     "propagating activity well"),
+        }
         # if even zero drive is above the window at this gain, more bias cannot help;
         # drop the gain and try again
     mid = 0.5 * (lo + hi)
@@ -226,8 +269,39 @@ def calibrate_drive(
             "NOT describe the wiring.")
     return float(best["bias"]), {"chosen_bias": float(best["bias"]),
                                  "gain_scale": float(best["gain_scale"]),
+                                 "global_inhibition": float(best.get("global_inhibition", 0.0)),
                                  "target_rate_hz": [lo, hi], "tried": tried,
                                  "saturated": True, "note": note}
+
+
+def branching_ratio(pop_spikes: np.ndarray) -> tuple[float, str]:
+    """Estimate sigma = E[A(t+1) | A(t)] / A(t): how many spikes one spike begets.
+
+    The single most useful summary of where a recurrent network sits.
+      sigma < 1  subcritical -- activity dies out; the network forgets immediately
+      sigma ~ 1  critical    -- the regime with the longest memory and richest dynamics
+      sigma > 1  supercritical -- activity amplifies into saturation (our 433 Hz run)
+
+    Estimated by least-squares regression of A(t+1) on A(t) through the origin, over
+    steps where A(t) > 0. Returns (sigma, verdict). This is a coarse estimator -- it
+    assumes a linear relationship and ignores the external drive, which inflates it --
+    so it is used for steering the calibration, not reported as a physics result.
+    """
+    a = np.asarray(pop_spikes, dtype=np.float64)
+    if a.size < 3:
+        return float("nan"), "too few steps"
+    x, y = a[:-1], a[1:]
+    mask = x > 0
+    if mask.sum() < 3:
+        return 0.0, "subcritical (the network is essentially silent)"
+    sigma = float((x[mask] @ y[mask]) / (x[mask] @ x[mask]))
+    if sigma < 0.85:
+        verdict = "subcritical -- activity dies out, little memory"
+    elif sigma > 1.15:
+        verdict = "supercritical -- activity amplifies toward saturation"
+    else:
+        verdict = "near-critical -- the regime where a reservoir works"
+    return sigma, verdict
 
 
 # -------------------------------------------------------------------- readout
@@ -325,9 +399,17 @@ class Separation:
     note: str = ""
 
     def describe(self) -> str:
-        verdict = ("distinct inputs are distinguishable in state space"
-                   if self.ratio > 1.5 else
-                   "inputs are NOT well separated: a decoder has little to work with")
+        if self.ratio > 100:
+            # a ratio in the thousands is not 100x better than a ratio of 10. It means
+            # nearby inputs diverge exponentially -- chaos, not computation. Such a
+            # network separates everything, including two copies of the same input plus
+            # noise, which is why generalisation rank collapses to kernel rank.
+            verdict = ("IMPLAUSIBLY HIGH -- this is chaotic amplification, not useful "
+                       "separation; check that generalisation rank has not collapsed")
+        elif self.ratio > 1.5:
+            verdict = "distinct inputs are distinguishable in state space"
+        else:
+            verdict = "inputs are NOT well separated: a decoder has little to work with"
         return f"separation ratio {self.ratio:.2f} ({verdict}); n_pairs={self.n_pairs}"
 
 
@@ -454,6 +536,8 @@ class ReservoirReport:
     memory: MemoryCapacity
     sep: Separation
     ranks: dict
+    sigma: float = float("nan")
+    sigma_verdict: str = ""
     params: dict = field(default_factory=dict)
     control: str = "none (real wiring)"
 
@@ -468,6 +552,7 @@ class ReservoirReport:
             f"reservoir: {self.n_neurons:,} neurons / {self.n_edges:,} edges  [{self.control}]",
             f"  activity        : {self.mean_rate_hz:.2f} Hz mean, "
             f"{100 * self.fraction_active:.1f}% of neurons ever spiked",
+            f"  branching ratio : {self.sigma:.3f} ({self.sigma_verdict})",
             f"  {self.memory.describe()}",
             f"  {self.sep.describe()}",
             f"  kernel rank {self.ranks['kernel_rank']} - generalisation rank "
@@ -516,17 +601,23 @@ def characterise(
     weights_before = np.asarray(conn.matrix.data).copy()
 
     gain_scale = 1.0
+    inhibition: float | None = None
 
     def factory() -> NetworkSimulator:
         sim = NetworkSimulator(conn, params, seed=seed)
-        if gain_scale != 1.0:
-            sim.p = replace(sim.p, synaptic_gain=sim.p.synaptic_gain * gain_scale)
+        if gain_scale != 1.0 or inhibition is not None:
+            sim.p = replace(
+                sim.p,
+                synaptic_gain=sim.p.synaptic_gain * gain_scale,
+                global_inhibition=sim.p.global_inhibition if inhibition is None else inhibition,
+            )
         return sim
 
     if bias is None:
         bias, cal = calibrate_drive(factory, input_neurons=input_neurons,
                                     amplitude=amplitude, seed=seed)
         gain_scale = float(cal.get("gain_scale", 1.0))
+        inhibition = float(cal.get("global_inhibition", 0.0))
     else:
         cal = {"bias": bias, "note": "bias supplied by caller, not calibrated"}
 
@@ -536,6 +627,7 @@ def characterise(
                         readout_neurons=readout_neurons, amplitude=amplitude,
                         bias=bias, washout=washout)
     mc = memory_capacity(st, max_delay=max_delay)
+    sigma, sigma_verdict = branching_ratio(st.pop_spikes)
     sep = separation(factory, input_neurons=input_neurons, n_pairs=n_sep_pairs,
                      steps=max(120, steps // 4), washout=min(washout, 40),
                      amplitude=amplitude, bias=bias, seed=seed)
@@ -553,8 +645,10 @@ def characterise(
         n_input=int(np.size(input_neurons)), n_readout=st.n_units,
         mean_rate_hz=st.mean_rate_hz, fraction_active=st.fraction_active,
         memory=mc, sep=sep, ranks=ranks, control=control_note,
+        sigma=sigma, sigma_verdict=sigma_verdict,
         params={"steps": steps, "washout": washout, "max_delay": max_delay,
                 "amplitude": amplitude, "bias": bias, "gain_scale": gain_scale,
+                "global_inhibition": inhibition,
                 "drive_calibration": cal, "seed": seed,
                 "n_sep_pairs": n_sep_pairs, "n_rank_streams": n_rank_streams},
     )

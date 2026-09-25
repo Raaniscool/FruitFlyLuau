@@ -87,6 +87,16 @@ class LIFConfig:
     adaptation: float = 0.0  # per-spike threshold adaptation (mV), decays with tau 100ms
     max_rate_guard: float = 0.0  # reserved: rate-based refractory extension (not implemented)
     clip_v: float = 40.0  # hard clamp on |V - v_rest| to keep the integrator stable
+    #: APL-LIKE global inhibition: a single pooled inhibitory signal driven by the
+    #: population firing rate and fed back to every neuron. The real mushroom body has
+    #: one giant inhibitory neuron (APL) that keeps Kenyon-cell activity sparse; our
+    #: 300-cell subgraph does not contain it, and without any substitute the network is
+    #: bistable between silence and seizure (measured, EXPERIMENTS.md). This is a
+    #: FUNCTIONAL stand-in -- a divisive-ish normalisation term, not a model of APL.
+    #: 0.0 disables it, which is the historical behaviour.
+    global_inhibition: float = 0.0
+    #: time constant of the pooled inhibition trace, in ms
+    inhibition_tau_ms: float = 10.0
 
 
 @dataclass

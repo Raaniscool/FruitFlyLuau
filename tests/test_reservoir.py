@@ -122,8 +122,13 @@ def test_calibration_picks_a_bias_by_measuring_not_guessing(tiny_setup):
     assert trace["tried"], "the calibration must record what it tried"
     assert all("mean_rate_hz" in row for row in trace["tried"])
     assert trace["chosen_bias"] == bias
-    rates = [r["mean_rate_hz"] for r in trace["tried"]]
-    assert rates == sorted(rates), "more background current must not lower the firing rate"
+    # monotonicity only holds WITHIN one (gain, inhibition) setting -- the sweep now
+    # varies all three knobs, so the raw list is not globally sorted
+    group = [r for r in trace["tried"]
+             if r["gain_scale"] == trace["tried"][0]["gain_scale"]
+             and r["global_inhibition"] == trace["tried"][0]["global_inhibition"]]
+    rates = [r["mean_rate_hz"] for r in group]
+    assert rates == sorted(rates), f"more background current must not lower the rate: {rates}"
 
 
 def test_characterise_never_modifies_a_single_weight(tiny_setup):
@@ -217,13 +222,19 @@ def dense_recurrent_connectome():
     return Connectome(root_ids=np.arange(n, dtype=np.int64) + 720575940600000000, matrix=adj)
 
 
-def test_a_dense_graph_is_brought_into_range_by_lowering_the_gain(dense_recurrent_connectome):
-    """Sweeping the background current alone cannot fix runaway recurrence."""
+def test_a_dense_graph_is_brought_into_range(dense_recurrent_connectome):
+    """Sweeping the background current alone cannot fix runaway recurrence.
+
+    Either lowering the gain or adding APL-like inhibition will do it. Inhibition is
+    preferable -- it keeps full synaptic gain, so the recurrent circuit still does
+    something -- but the test only requires that one of them was applied.
+    """
     cfg = AppConfig.load()
     rep = characterise(dense_recurrent_connectome, cfg.lif, input_neurons=np.arange(16),
                        steps=300, washout=60, max_delay=5, seed=1,
                        n_sep_pairs=1, n_rank_streams=3)
-    assert rep.params["gain_scale"] < 1.0, "a dense recurrent graph needs the gain reduced"
+    tamed = rep.params["gain_scale"] < 1.0 or rep.params["global_inhibition"] > 0.0
+    assert tamed, "a dense recurrent graph needs either a lower gain or inhibition"
     assert 1.0 <= rep.mean_rate_hz <= 120.0, (
         f"calibration left the network at {rep.mean_rate_hz:.0f} Hz, outside any usable range"
     )
@@ -253,3 +264,112 @@ def test_calibration_trace_records_both_knobs(dense_recurrent_connectome):
     assert trace["tried"], "the sweep must be auditable"
     assert all({"bias", "gain_scale", "mean_rate_hz"} <= set(r) for r in trace["tried"])
     assert "gain_scale" in trace and "saturated" in trace
+
+
+# ------------------------------------------------- inhibition and criticality
+def test_branching_ratio_recovers_a_known_value():
+    """A(t+1) = 0.8 * A(t) must estimate sigma ~ 0.8."""
+    from fruitfly.experiment.reservoir import branching_ratio
+
+    a = [100.0]
+    for _ in range(60):
+        a.append(a[-1] * 0.8)
+    sigma, verdict = branching_ratio(np.asarray(a))
+    assert abs(sigma - 0.8) < 0.02
+    assert "subcritical" in verdict
+
+    grow = [1.0]
+    for _ in range(40):
+        grow.append(grow[-1] * 1.3)
+    sigma_up, verdict_up = branching_ratio(np.asarray(grow))
+    assert sigma_up > 1.15 and "supercritical" in verdict_up
+
+
+def test_branching_ratio_calls_a_silent_network_subcritical():
+    from fruitfly.experiment.reservoir import branching_ratio
+
+    sigma, verdict = branching_ratio(np.zeros(50))
+    assert sigma == 0.0 and "silent" in verdict
+
+
+def test_global_inhibition_lowers_the_firing_rate(dense_recurrent_connectome):
+    """The APL-like pool must actually suppress activity, monotonically."""
+    from dataclasses import replace
+
+    from fruitfly.experiment.reservoir import collect_states
+
+    cfg = AppConfig.load()
+    u = np.random.default_rng(0).uniform(0, 1, 200)
+    rates = []
+    for inhib in (0.0, 20.0, 60.0, 120.0):
+        p = replace(cfg.lif, global_inhibition=inhib)
+        st = collect_states(NetworkSimulator(dense_recurrent_connectome, p, seed=1), u,
+                            input_neurons=np.arange(16), amplitude=22, bias=4.0, washout=50)
+        rates.append(st.mean_rate_hz)
+    assert rates[-1] < rates[0], f"inhibition did not reduce activity: {rates}"
+
+
+def test_inhibition_zero_is_exactly_the_old_behaviour(dense_recurrent_connectome):
+    """The knob must be opt-in: 0.0 has to reproduce the pre-inhibition dynamics."""
+    from dataclasses import replace
+
+    from fruitfly.experiment.reservoir import collect_states
+
+    cfg = AppConfig.load()
+    u = np.random.default_rng(1).uniform(0, 1, 120)
+    a = collect_states(NetworkSimulator(dense_recurrent_connectome, cfg.lif, seed=3), u,
+                       input_neurons=np.arange(8), bias=3.0, washout=20)
+    b = collect_states(
+        NetworkSimulator(dense_recurrent_connectome, replace(cfg.lif, global_inhibition=0.0), seed=3),
+        u, input_neurons=np.arange(8), bias=3.0, washout=20)
+    assert np.array_equal(a.X, b.X)
+
+
+def test_calibration_searches_every_inhibition_level_before_choosing(dense_recurrent_connectome):
+    """Stopping at the first workable level picks a dead-recurrence setting.
+
+    Measured: the first in-range setting was gain x0.02 with no inhibition -- in range by
+    firing rate, but the recurrent circuit contributes nothing. Sweeping all levels finds
+    full gain with inhibition instead.
+    """
+    cfg = AppConfig.load()
+    _bias, trace = calibrate_drive(
+        lambda: NetworkSimulator(dense_recurrent_connectome, cfg.lif, seed=1),
+        input_neurons=np.arange(16), steps=150,
+    )
+    levels = {row["global_inhibition"] for row in trace["tried"]}
+    assert len(levels) > 1, "the sweep must try more than one inhibition level"
+    assert "branching_ratio" in trace
+    if not trace["saturated"]:
+        assert abs((trace["branching_ratio"] or 0) - 1.0) < 0.35
+
+
+def test_an_absurd_separation_ratio_is_called_chaos_not_success():
+    """7,131 is not a good score. It means nearby inputs diverge exponentially."""
+    from fruitfly.experiment.reservoir import Separation
+
+    s = Separation(ratio=7131.5, between_input_distance=1e6, within_input_distance=140.0,
+                   n_pairs=2)
+    text = s.describe()
+    assert "IMPLAUSIBLY HIGH" in text and "chaotic" in text
+
+
+def test_excitation_balance_reports_an_all_excitatory_graph_as_a_problem(dense_recurrent_connectome):
+    bal = dense_recurrent_connectome.excitation_balance()
+    assert bal["inhibitory_edge_fraction"] == 0.0
+    assert bal["excitatory_edge_fraction"] == 1.0
+    assert "no stable middle regime" in bal["ei_balance_note"]
+
+
+def test_excitation_balance_accepts_a_mixed_graph():
+    from scipy import sparse
+
+    from fruitfly.graph.connectome import Connectome
+
+    rng = np.random.default_rng(0)
+    n = 50
+    w = rng.uniform(1, 5, 400) * rng.choice([1.0, -1.0], 400, p=[0.7, 0.3])
+    adj = sparse.csr_matrix((w, (rng.integers(0, n, 400), rng.integers(0, n, 400))), shape=(n, n))
+    bal = Connectome(root_ids=np.arange(n, dtype=np.int64), matrix=adj).excitation_balance()
+    assert 0.2 < bal["inhibitory_edge_fraction"] < 0.4
+    assert "can stabilise" in bal["ei_balance_note"]

@@ -294,3 +294,50 @@ goes, and it is a property of our model, not of the fly:
 Until at least (1) and (2) are addressed, "the real connectome carries no more usable
 signal than its shuffle" is a statement about **this model of it**, not about the
 connectome. Recorded as measured; not generalised.
+
+### Adding APL-like inhibition (2026-09-25)
+
+Follow-up to the bistability finding above. Three changes, each motivated by a
+measurement rather than a guess:
+
+1. **`Connectome.excitation_balance()`** reports what fraction of edges is actually
+   inhibitory. On an all-excitatory graph it says so and names the consequence.
+2. **`lif.global_inhibition`** — an APL-like pooled inhibitory signal driven by the
+   population firing rate and fed back to every neuron. The real mushroom body has one
+   giant inhibitory neuron (APL) keeping Kenyon-cell activity sparse; a 300-cell
+   subgraph does not contain it. This is a **functional stand-in, not a model of APL**.
+   `0.0` disables it and reproduces the previous dynamics exactly (there is a test).
+3. **Branching ratio** σ = E[A(t+1)]/A(t), estimated per run. σ<1 subcritical, σ≈1
+   critical, σ>1 supercritical. Calibration now picks, among settings with an acceptable
+   firing rate, the one closest to σ=1 — because a firing rate alone cannot distinguish
+   "18 driven cells and dead recurrence" from "a network propagating activity".
+
+Measured on a graph matched to the real subgraph (300 neurons, 6,237 all-excitatory
+edges, mean degree 20.8):
+
+| inhibition | gain | rate | active | σ |
+|---:|---:|---:|---:|---:|
+| 0 | ×1.00 | 474 Hz | 100% | 0.72 |
+| 0 | ×0.25 | 9 Hz | 7% | 0.29 |
+| 20 | ×0.50 | 11 Hz | 19% | 0.65 |
+| 60 | ×1.00 | **82 Hz** | 98% | **0.98** |
+
+**The middle regime now exists.** Without inhibition the network only ever sat at ~474 Hz
+or ~9 Hz; with it, full synaptic gain reaches a near-critical 82 Hz.
+
+**It did not rescue the null.** Calibrated to σ=0.993 at 32 Hz, memory capacity is still
+0.00 and generalisation rank still equals kernel rank. Separation came out at 7,131 —
+which is not a good score. A ratio in the thousands means nearby inputs diverge
+exponentially: chaos, not computation. The report now labels any ratio above 100 as
+`IMPLAUSIBLY HIGH -- chaotic amplification, not useful separation`, because the earlier
+version would have printed it as a triumph.
+
+So the network has moved from *bistable* to *critical but chaotic*. That is progress on
+the dynamics and no progress on the computation. The next candidates, in order:
+
+1. **Slower synapses.** `tau_syn_ms=2` at `dt=0.5` gives the state a ~4-step horizon;
+   memory capacity cannot exceed what the synaptic filter retains. This is the cheapest
+   candidate and the most likely to matter.
+2. **Real inhibitory neurons rather than a pooled term.** Select a subgraph with a
+   measured inhibitory fraction above ~15% instead of adding a global knob.
+3. **Readout from a subset with long intrinsic timescales** rather than all 300 cells.

@@ -208,7 +208,49 @@ class Connectome:
             "weight_max": float((w.max() if w.size else 0.0)),
             "n_self_connections": int((self.matrix.diagonal() != 0).sum()),
             "reciprocal_pair_fraction": float(self._reciprocity()),
+            **self.excitation_balance(),
         }
+
+    def excitation_balance(self) -> dict:
+        """How much of this subgraph is actually inhibitory.
+
+        Asked because the first real mushroom-body run was bistable between seizure
+        (100% active at ~430 Hz) and silence (6% active), which is what a recurrent graph
+        does when almost every edge is excitatory. FAFB is ACh-dominated, so the answer
+        is expected to be low -- but expected is not measured, so it is reported.
+
+        ``inhibitory_edge_fraction`` is the fraction of edges with negative weight;
+        ``mean_signed_weight`` is the average signed edge weight, i.e. the net drive one
+        spike delivers. Both are properties of OUR sign mapping applied to the data, not
+        facts about the fly.
+        """
+        w = np.asarray(self.matrix.data)
+        if w.size == 0:
+            return {"inhibitory_edge_fraction": 0.0, "excitatory_edge_fraction": 0.0,
+                    "silent_edge_fraction": 0.0, "mean_signed_weight": 0.0,
+                    "ei_balance_note": "no edges"}
+        neg = int((w < 0).sum())
+        pos = int((w > 0).sum())
+        zero = int((w == 0).sum())
+        out = {
+            "inhibitory_edge_fraction": float(neg / w.size),
+            "excitatory_edge_fraction": float(pos / w.size),
+            "silent_edge_fraction": float(zero / w.size),
+            "mean_signed_weight": float(w.mean()),
+        }
+        if self.nt_types is not None:
+            labels, counts = np.unique(np.asarray(self.nt_types, dtype=str), return_counts=True)
+            out["neurons_by_transmitter"] = {str(k): int(v) for k, v in zip(labels, counts)}
+        if out["inhibitory_edge_fraction"] < 0.05:
+            out["ei_balance_note"] = (
+                f"only {100 * out['inhibitory_edge_fraction']:.1f}% of edges are inhibitory: "
+                "a recurrent graph this excitatory has no stable middle regime, and the "
+                "simulation will tend to sit at either silence or saturation. Consider "
+                "lif.global_inhibition."
+            )
+        else:
+            out["ei_balance_note"] = "inhibitory fraction is within a range that can stabilise recurrence"
+        return out
 
     def _reciprocity(self) -> float:
         """Fraction of edges whose reverse edge also exists (network property, not a model)."""
