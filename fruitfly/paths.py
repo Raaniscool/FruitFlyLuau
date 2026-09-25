@@ -73,15 +73,17 @@ def _candidate_roots() -> Iterable[tuple[str, Path]]:
     home = Path.home()
     if sys.platform.startswith("win"):
         local = os.environ.get("LOCALAPPDATA")
-        yield from [
-            ("Downloads", home / "Downloads" / "FAFB_v783"),
-            ("Downloads", home / "Downloads" / "fafb_v783"),
-            ("Downloads", home / "Downloads"),
-            ("USERPROFILE", home / "Downloads" / "FlyWire"),
-            ("LOCALAPPDATA", Path(local) / "FruitFly" / "data" / "FAFB_v783") if local else None,
-            ("drive", Path("D:/FAFB_v783")),
-            ("drive", Path("D:/data/FAFB_v783")),
-        ]
+        yield ("Downloads", home / "Downloads" / "FAFB_v783")
+        yield ("Downloads", home / "Downloads" / "fafb_v783")
+        yield ("Downloads", home / "Downloads")
+        yield ("USERPROFILE", home / "Downloads" / "FlyWire")
+        if local:
+            # conditional: LOCALAPPDATA is normally set on Windows but is absent in
+            # a sanitised environment. The old form put a bare None in the list,
+            # which blew up in the caller's `for label, p in _candidate_roots()`.
+            yield ("LOCALAPPDATA", Path(local) / "FruitFly" / "data" / "FAFB_v783")
+        yield ("drive", Path("D:/FAFB_v783"))
+        yield ("drive", Path("D:/data/FAFB_v783"))
     else:
         yield from [
             ("XDG_DATA_HOME", Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")) / "fafb" / "FAFB_v783"),

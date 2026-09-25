@@ -82,3 +82,23 @@ def test_to_dict_roundtrips():
     a = AppConfig.load(use_defaults_file=False)
     b = AppConfig.from_dict(a.to_dict())
     assert b.to_dict() == a.to_dict()
+
+
+def test_candidate_roots_never_yields_none(monkeypatch):
+    """Regression: a conditional entry used to emit a bare None into the list.
+
+    On Windows LOCALAPPDATA is normally set, so the bug only surfaced in a
+    sanitised environment -- where `for label, p in _candidate_roots()` raised
+    `TypeError: cannot unpack non-iterable NoneType object` and data resolution
+    died instead of reporting "not found".
+    """
+    from fruitfly.paths import _candidate_roots
+
+    for var in ("LOCALAPPDATA", "XDG_DATA_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    roots = list(_candidate_roots())
+    assert roots, "there must always be somewhere to look"
+    for entry in roots:
+        assert entry is not None
+        label, path = entry  # must always unpack
+        assert isinstance(label, str) and label
