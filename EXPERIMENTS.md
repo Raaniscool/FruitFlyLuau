@@ -252,3 +252,45 @@ would be hallucinating structure that does not exist in the file.
 The number that matters is the same table computed on the actual FAFB download,
 where the two arms differ in something real. That run is pending the schema audit.
 
+
+### First real-connectome measurement (mushroom body, 2026-09-25)
+
+Population: 300 of 5,591 mushroom-body neurons (`classification.class` in Kenyon_Cell,
+MBON, MBIN, DAN), grown as a connected subgraph. 6,237 edges, density 0.069, mean degree
+20.8, **0 isolated neurons**, 23.6% reciprocal pairs. Real FAFB v783 edges, real
+transmitter-derived signs.
+
+| arm | mean rate | active | MC (delays 1-20) | separation | kernel − gen. rank |
+|---|---:|---:|---:|---:|---:|
+| real wiring | 6.20 Hz | 6.0% | 0.10 | 1.13 | 8 − 8 = 0 |
+| degree-preserving shuffle | 5.43 Hz | 5.3% | 0.14 | 1.04 | 8 − 8 = 0 |
+
+**Result: no measurable advantage for the real wiring.** Memory capacity is ~0.1 of one
+timestep in both arms — effectively none. Separation is 1.13 vs 1.04, i.e. both arms
+barely distinguish different inputs. This is a clean negative result, not a failed run:
+the calibration landed in range, the control ran, and the two arms agree.
+
+**The finding underneath it is more interesting than the null.** Look at the calibration
+sweep: at gain ×0.5 the network fires at 130-480 Hz with 100% of cells active; one step
+down at ×0.25 it collapses to 6 Hz with 6% active. There is no intermediate regime. 6%
+of 300 neurons is ~18 cells — approximately the 16 input-driven cells and little else,
+so the recurrent circuit is contributing essentially nothing at the usable gain.
+
+The real mushroom-body subgraph, under this LIF model, is **bistable between seizure and
+silence**. A reservoir needs the edge between those states. That is where the next work
+goes, and it is a property of our model, not of the fly:
+
+1. **No feedback inhibition.** The real mushroom body has strong global inhibition (the
+   APL neuron) that keeps Kenyon-cell activity sparse. Our 300-cell subgraph may not
+   include it, and nothing replaces it. Without a normalising signal, a recurrent
+   excitatory graph has only two stable states.
+2. **Transmitter signs are mostly excitatory.** ACH dominates FAFB, so most edges are +1
+   and inhibition is rare in the subgraph. Worth measuring directly: what fraction of
+   these 6,237 edges is negative?
+3. **Per-graph dynamic calibration.** The LIF parameters were fitted to a mean-degree-2.6
+   synthetic graph. They should be re-fitted for each population, targeting a measured
+   criticality statistic (branching ratio ~1) rather than just a firing rate.
+
+Until at least (1) and (2) are addressed, "the real connectome carries no more usable
+signal than its shuffle" is a statement about **this model of it**, not about the
+connectome. Recorded as measured; not generalised.
