@@ -69,6 +69,27 @@ python scripts/inspect_fafb.py --dir "$env:FAFB_DATA_PATH" --deep --write-profil
    loader then prefers over its built-in aliases — no code edit needed.
 4. `python -m fruitfly stats --mode small` then `python -m fruitfly run -e exp003_pattern ...`.
 
+## Where this is going
+
+The stated long-term question — how far a brain-derived network can be pushed toward
+writing Luau — is unchanged, but it is **gated behind a result that does not exist yet**:
+the network has not learned anything above chance (`EXPERIMENTS.md`, 0/18 configurations
+in two sweeps). The current work therefore targets measurements that cannot be blocked
+by that wall:
+
+1. **Reservoir characterisation** (`python -m fruitfly reservoir`) — freeze the
+   connectome, train only a linear readout, and measure memory capacity, separation and
+   effective rank against a degree-preserving shuffle. Implemented; see EXPERIMENTS.md.
+2. **Central-complex ring-attractor dynamics** — does the real wiring sustain and rotate
+   a heading bump? A dynamics result, not a learning result. Needs the real download.
+3. **Mushroom-body odour association**, then **reversal learning** — the circuit the fly
+   actually uses for associative learning, and the best candidate for a first genuine
+   learning result.
+
+`fruitfly/luau/` remains in the tree as a clearly-labelled scaffold (tokenizer, task
+schema, static safety scanner). It has never generated code and is not on the critical
+path; see `PHASE_STATUS` in that package.
+
 ## Layout
 
 ```

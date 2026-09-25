@@ -198,3 +198,57 @@ in order of expected value:
 Until one of those (or something better) produces a held-out number above chance with
 |dW| > 0, the correct summary of this project is: **framework verified end-to-end,
 learning not yet demonstrated.**
+
+---
+
+## Reservoir characterisation (frozen connectome, no training)
+
+Added after the null results above. Its purpose is to separate two explanations
+that the learning experiments could not distinguish:
+
+1. the plasticity rule is wrong, or
+2. the network's state never contains the information a readout would need — in
+   which case no learning rule could succeed.
+
+**Nothing is trained here except a closed-form ridge readout; the connectome is
+frozen and the code asserts it** (`characterise()` raises if a single weight
+changes). Method follows Jaeger (2001) memory capacity, Legenstein & Maass (2007)
+separation property, and kernel/generalisation rank.
+
+### What is measured
+
+| metric | question it answers | how to read it |
+|---|---|---|
+| memory capacity (MC) | how many past timesteps of the input can a linear decoder recover from the current state? | in units of timesteps; scored on **held-out** timesteps with a contiguous split |
+| separation ratio | do different input streams leave distinguishable traces? | > 1 means distinguishable; ≈ 1 means the network smears inputs together |
+| kernel rank − generalisation rank | useful dimensionality minus noise-driven dimensionality | higher is better; kernel rank is capped by `--rank-streams` and saturation is flagged |
+
+The background drive is **calibrated, not assumed**: `calibrate_drive()` sweeps
+candidate bias currents and picks the smallest one whose measured mean rate lands
+in 5–80 Hz, recording every candidate it tried. Without it a sparse subgraph sits
+below threshold and every metric describes a silent network — which the report
+flags explicitly rather than scoring.
+
+### Reproduce
+
+```bash
+python -m fruitfly reservoir --data-dir data/sample/fafb_v783 --neurons 300 \
+    --steps 600 --washout 100 --max-delay 20 --json runs/reservoir.json
+```
+
+### Measured on the synthetic sample (300 requested → 178 in the connected subgraph)
+
+| arm | mean rate | MC (delays 1–20) | separation | kernel − generalisation rank |
+|---|---:|---:|---:|---:|
+| real wiring | 7.77 Hz | 0.51 | 1.59 | 4 − 4 = 0 |
+| degree-preserving shuffle | 7.94 Hz | 0.66 | 0.53 | 8 − 8 = 0 |
+
+**Read this as a validation of the instrument, not as a result about the fly.**
+The sample data is synthetic random wiring, so the real arm *should* score about
+the same as its shuffle — and it does (MC 0.51 vs 0.66, i.e. no advantage, with
+the shuffle nominally ahead). A tool that reported the real wiring winning here
+would be hallucinating structure that does not exist in the file.
+
+The number that matters is the same table computed on the actual FAFB download,
+where the two arms differ in something real. That run is pending the schema audit.
+

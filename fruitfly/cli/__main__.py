@@ -242,6 +242,48 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reservoir(args: argparse.Namespace) -> int:
+    """Characterise the FROZEN connectome as a reservoir. Trains no weights."""
+    from ..experiment.reservoir import characterise
+    from ..graph.select import input_output_sets
+
+    cfg = _cfg(args)
+    pop = _load_population(cfg)
+    conn = pop.connectome
+    n_in = int(cfg.graph.selection_kwargs.get("n_inputs", 16))
+    n_out = int(cfg.graph.selection_kwargs.get("n_outputs", 4))
+    inputs, _outputs, audit = input_output_sets(
+        conn, n_inputs=n_in, n_outputs=n_out, rng=np_rng(cfg.train.seed))
+    print(pop.describe())
+    print(f"\ninput drive neurons: {inputs.size} (source: {audit.get('input_source', '-')}, "
+          f"{audit.get('n_ancestors_within_depth', 0):,} ancestors within depth {audit.get('depth', '-')})")
+    rows = []
+    controls = ["none", "shuffled"] if args.control == "both" else [args.control]
+    for ctrl in controls:
+        rep = characterise(
+            conn, cfg.lif,
+            input_neurons=np.asarray(inputs),
+            steps=int(args.steps), washout=int(args.washout),
+            max_delay=int(args.max_delay), amplitude=float(args.amplitude),
+            bias=(None if args.bias is None else float(args.bias)),
+            seed=cfg.train.seed, n_rank_streams=int(args.rank_streams),
+            control=ctrl,
+        )
+        print()
+        print(rep.describe())
+        rows.append(rep.to_dict())
+    print("\nNo weight was modified: this measures what the wiring makes available to a "
+          "linear decoder, not what the network can learn.")
+    if len(rows) == 2:
+        a, b = rows[0]["memory"]["total"], rows[1]["memory"]["total"]
+        print(f"real vs shuffled memory capacity: {a:.2f} vs {b:.2f} "
+              f"({'real wiring ahead' if a > b else 'no advantage for the real wiring'})")
+    if args.json:
+        Path(args.json).write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
+        print(f"wrote {args.json}")
+    return 0
+
+
 def cmd_rules(args: argparse.Namespace) -> int:
     from ..io.decoder import available_decoders
     from ..io.encoder import available_encoders
@@ -306,6 +348,19 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--plot", nargs="?", const="auto", default="",
                     help="write the figures; bare --plot uses the run directory")
     rn.set_defaults(fn=cmd_run)
+
+    rv = sub.add_parser("reservoir", parents=[common],
+                        help="frozen-connectome reservoir measurements (no training)")
+    rv.add_argument("--steps", type=int, default=600)
+    rv.add_argument("--washout", type=int, default=100)
+    rv.add_argument("--max-delay", type=int, default=20)
+    rv.add_argument("--amplitude", type=float, default=22.0)
+    rv.add_argument("--bias", type=float, default=None,
+                    help="background current; omit to calibrate it by measurement")
+    rv.add_argument("--rank-streams", type=int, default=8)
+    rv.add_argument("--control", default="both", choices=["none", "shuffled", "both"])
+    rv.add_argument("--json", default="")
+    rv.set_defaults(fn=cmd_reservoir)
 
     sub.add_parser("rules", help="list registered rules/encoders/decoders/selectors").set_defaults(fn=cmd_rules)
     return ap
