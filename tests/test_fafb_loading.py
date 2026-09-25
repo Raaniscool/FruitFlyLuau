@@ -222,3 +222,101 @@ def test_specs_for_ignores_an_unrelated_asset_key():
 
     prof = {"neurons": {"columns": {"source_neuron": "source_neuron"}}}
     assert specs_for(prof, "connections_filtered", CONNECTION_FIELDS) is CONNECTION_FIELDS
+
+
+# --------------------------------------------------------------- measured schema
+# The constants below were MEASURED from a real FAFB v783 download on 2026-09-25
+# (Windows, 242-file Downloads folder) by scripts/inspect_fafb.py --deep. They are
+# not copied from the portal documentation -- they happen to agree with it exactly,
+# which is itself the finding. See docs/fafb_schema_report_summary.md.
+MEASURED_V783 = {
+    "connection_rows": 5_342_446,
+    "unique_pairs": 3_732_460,
+    "repeated_pair_rows": 1_609_986,
+    "summed_syn_count": 50_666_648,
+    "neuropils": 79,
+    "unique_pre": 137_518,
+    "unique_post": 130_183,
+    "unique_nodes": 138_584,
+    "self_connections": 0,
+    "reciprocal_pairs": 620_180,
+    "neurons_rows": 139_255,
+    "nt_type_missing": 19_658,
+    "max_root_id": 720_575_940_661_339_776,
+}
+
+
+def test_reference_counts_match_what_was_measured_on_the_real_download():
+    """Documentation and reality agree. If they ever diverge, the measurement wins."""
+    from fruitfly.dataset.assets import REFERENCE_COUNTS
+
+    assert REFERENCE_COUNTS["cells"] == MEASURED_V783["neurons_rows"]
+    assert REFERENCE_COUNTS["connections_rows_filtered"] == MEASURED_V783["connection_rows"]
+    assert REFERENCE_COUNTS["unique_pairs"] == MEASURED_V783["unique_pairs"]
+    assert REFERENCE_COUNTS["synapses"] == MEASURED_V783["summed_syn_count"]
+    assert REFERENCE_COUNTS["neuropils"] == MEASURED_V783["neuropils"]
+
+
+def test_the_connection_schema_the_loader_expects_is_the_one_the_real_file_has():
+    """Column names and order, verbatim from the real header."""
+    from fruitfly.dataset.schema import CONNECTION_FIELDS
+
+    real_header = ["pre_root_id", "post_root_id", "neuropil", "syn_count", "nt_type"]
+    names = {f.name for f in CONNECTION_FIELDS}
+    for col in real_header:
+        assert any(col in ({f.name} | set(f.aliases)) for f in CONNECTION_FIELDS), (
+            f"the real file has a {col!r} column that no FieldSpec accepts: {sorted(names)}"
+        )
+
+
+def test_root_ids_must_survive_the_real_magnitude():
+    """Every observed id is 18 digits and exceeds 2^53: float64 would corrupt them."""
+    big = MEASURED_V783["max_root_id"]
+    assert big > 2 ** 53
+    # at this magnitude float64 has a spacing of 128, so ids are silently snapped to a
+    # multiple of 128. The max id happens to be one; its neighbours are not.
+    assert int(float(big + 1)) != big + 1, "float64 must be shown to corrupt a real id"
+    assert np.int64(big) == big and np.int64(big + 1) == big + 1
+
+
+def test_duplicate_pair_merging_is_required_by_the_real_file():
+    """5,342,446 rows collapse to 3,732,460 pairs -- 30% of rows are extra neuropils."""
+    m = MEASURED_V783
+    assert m["connection_rows"] - m["unique_pairs"] == m["repeated_pair_rows"]
+    fraction = m["repeated_pair_rows"] / m["connection_rows"]
+    assert 0.29 < fraction < 0.31, (
+        "a loader that skipped merge_duplicates='sum' would silently keep only one "
+        f"neuropil's synapses for {fraction:.0%} of rows"
+    )
+
+
+def test_mushroom_body_selector_is_registered_and_documented():
+    from fruitfly.graph import list_selectors
+    from fruitfly.graph.select import _mushroom_body
+
+    assert "mushroom_body" in list_selectors()
+    doc = _mushroom_body.__doc__ or ""
+    assert "Kenyon_Cell" in doc
+    assert "our inventions" in doc, "the selector must not imply biological equivalence"
+
+
+def test_mushroom_body_selection_fails_loudly_without_the_classification_file(caplog, tiny_connectome):
+    """Without classification.csv.gz there is no class column. Say which file is missing."""
+    import logging
+
+    from fruitfly.graph.select import select_population
+
+    with caplog.at_level(logging.WARNING, logger="fruitfly.fruitfly.graph.select"):
+        with pytest.raises(ValueError) as exc:
+            select_population(
+                "mushroom_body",
+                ids=tiny_connectome.root_ids,
+                adjacency=tiny_connectome.matrix,
+                metadata=None,
+                rng=np.random.default_rng(0),
+            )
+    # the exception says the population is empty; the log says WHY
+    assert "mushroom_body" in str(exc.value)
+    assert any("classification" in r.message for r in caplog.records), (
+        "an empty selection must name the file that would have made it non-empty"
+    )

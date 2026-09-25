@@ -585,8 +585,14 @@ def write_markdown(rep: dict, out: Path) -> None:
 
     L += ["", "## 4. Row counts", ""]
     rows = []
+    skipped_non_tables = 0
     for f in rep["files"]:
         if f.get("container") in ("zip", "skipped"):
+            continue
+        if not f.get("columns"):
+            # never parsed (installer, image, archive): it has no rows to count, and
+            # listing 200 of them as "UNKNOWN row count" buries the six files that matter
+            skipped_non_tables += 1
             continue
         exact = f.get("row_count_is_exact")
         n = f.get("n_rows_including_header")
@@ -595,6 +601,9 @@ def write_markdown(rep: dict, out: Path) -> None:
                      "exact" if exact else f"profiled first {f.get('n_rows_profiled', 0):,} rows",
                      _fmt(f.get("n_rows_profiled"))])
     L += _table(["file", "data rows (header excluded)", "basis", "rows profiled"], rows)
+    if skipped_non_tables:
+        L += ["", f"{skipped_non_tables} non-table files are omitted from this table: they were never "
+                  "opened, so they have no row count to report."]
     L += ["", "Documented reference counts for comparison (FlyWire/Codex portal):", "",
           "```", json.dumps(rep["reference_counts"], indent=2, sort_keys=True), "```"]
 
@@ -795,10 +804,19 @@ def write_markdown(rep: dict, out: Path) -> None:
     L += ["", "## 18. Files to keep optional / lazy-loaded", ""]
     rows = []
     for f in rep["files"]:
+        # ONLY recognised dataset assets. A 1.5 GB installer in the same folder is not
+        # a FAFB file to "lazy-load"; saying so would be advice about the wrong thing.
+        if not f.get("asset"):
+            continue
         if f.get("asset") in LARGE_ASSETS or f.get("size_bytes", 0) > 200 * 1048576 or f.get("legacy"):
             rows.append([f"`{f['file']}`", f"{f.get('size_bytes', 0) / 1048576:.1f} MiB",
                          f.get("legacy") or "size -- stream or skip; never load whole into RAM"])
-    L += _table(["file", "size", "reason"], rows) if rows else ["Nothing in this directory is large enough to require it."]
+    if rows:
+        L += _table(["file", "size", "reason"], rows)
+    else:
+        L += ["No FAFB asset in this directory is large enough to require lazy loading. "
+              "The two that would be -- the synapse table (~2.7 GB) and the skeletons (~13 GB) -- "
+              "are not present here."]
 
     L += ["", "---", "",
           "A connectome is a wiring map. Everything this project builds on top of it -- neuron dynamics, "

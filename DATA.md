@@ -149,3 +149,15 @@ synthetic result can never be misread as a connectome result.
 cache or a run's checkpoints: they are reproducible from the asset list above plus a
 seed. `config/local.yaml` and `.fafb_path` (machine-local absolute paths) are
 ignored as well.
+
+
+## Measured against the real download (2026-09-25)
+
+The audit has now been run against an actual v783 download. Every documented count in this
+file was confirmed exactly: 5,342,446 connection rows, 3,732,460 unique pairs, 50,666,648
+summed synapses, 79 neuropils, 139,255 neurons.
+
+See `docs/fafb_schema_report_summary.md` for the full transcription, including the facts the
+portal does not document: 30.1% of connection rows are duplicate (pre, post) pairs differing
+only by neuropil (so `merge_duplicates="sum"` is mandatory), 16.6% of pairs are reciprocal,
+there are zero self-connections, and `nt_type` is missing for 19,658 neurons.

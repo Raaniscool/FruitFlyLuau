@@ -146,6 +146,37 @@ def _nt(ctx: SelectionContext) -> np.ndarray:
     return idx
 
 
+@register("mushroom_body")
+def _mushroom_body(ctx: SelectionContext) -> np.ndarray:
+    """The associative-learning circuit, selected by `classification.class`.
+
+    Measured in the real v783 download (see fafb_schema_report.md section 12): the
+    `class` column contains Kenyon_Cell, MBON, MBIN and DAN as literal values, so this
+    circuit can be selected with the annotations the portal already ships -- no extra
+    file, no manual id list.
+
+    Why this circuit: it is the one the fly genuinely uses for associative learning,
+    which makes it the honest first target for a learning experiment. Selecting it does
+    NOT mean the model learns the way the fly does -- the dynamics and the plasticity
+    rule remain our inventions.
+
+    kwargs: ``classes`` (default the four above), ``n`` (cap, sampled with ctx.rng).
+    """
+    classes = ctx.kwargs.get("classes") or ["Kenyon_Cell", "MBON", "MBIN", "DAN"]
+    mask = ctx.match("classification.class", classes)
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        log.warning(
+            "mushroom_body selection matched 0 neurons. It needs classification.csv.gz; "
+            "without it the class column is unavailable and nothing can be selected by cell class."
+        )
+        return idx
+    k = int(ctx.kwargs.get("n", 0))
+    if k and idx.size > k:
+        idx = ctx.rng.choice(idx, size=k, replace=False)
+    return idx
+
+
 @register("visual")
 def _visual(ctx: SelectionContext) -> np.ndarray:
     mask = ctx.match("visual_types.type", ctx.kwargs.get("values"), regex=ctx.kwargs.get("regex"))
