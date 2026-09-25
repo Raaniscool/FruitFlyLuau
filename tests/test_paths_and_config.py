@@ -29,7 +29,7 @@ def test_explicit_argument_beats_env(tmp_path, monkeypatch):
     assert found == good
 
 
-def test_missing_data_gives_actionable_error(tmp_path, monkeypatch):
+def test_missing_data_gives_actionable_error(tmp_path, monkeypatch, isolated_home):
     monkeypatch.delenv(ENV_VAR, raising=False)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError) as exc:
@@ -41,7 +41,7 @@ def test_missing_data_gives_actionable_error(tmp_path, monkeypatch):
     assert "Locations tried" in msg or "NOT found" in msg
 
 
-def test_search_trail_lists_every_candidate(tmp_path, monkeypatch):
+def test_search_trail_lists_every_candidate(tmp_path, monkeypatch, isolated_home):
     monkeypatch.delenv(ENV_VAR, raising=False)
     monkeypatch.chdir(tmp_path)
     _, trail = find_data_dir()

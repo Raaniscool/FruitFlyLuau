@@ -302,6 +302,12 @@ ASSETS: dict[str, AssetSpec] = {
 
 #: Documented scale of the v783 release, for honest "is my file complete?" checks.
 #: These are portal/documentation figures, not measurements of this machine's copy.
+#: The only assets without which nothing can run. Everything else enriches the
+#: graph (selection by class, visual annotation, coordinates for plots) but the
+#: pipeline builds and simulates without it -- measured on a download that has
+#: only these two plus classification/cell_types/cell_stats/connectivity_tags.
+CORE_ASSETS: tuple[str, ...] = ("connections_filtered", "nt_predictions")
+
 REFERENCE_COUNTS: dict[str, int] = {
     "cells": 139_255,
     "connections_rows_filtered": 5_342_446,

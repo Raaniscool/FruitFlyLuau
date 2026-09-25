@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect your local FAFB v783 download and report its REAL schema.
+r"""Inspect your local FAFB v783 download and report its REAL schema.
 
 Why this script exists: the project must not assume the shape of your files. This
 is a standalone diagnostic (Python 3.10+, **stdlib only** -- no numpy/pandas
@@ -133,6 +133,11 @@ REFERENCE = {
     "synapses": 50666648,
     "neuropils": 79,
 }
+
+#: Only these are ever opened and parsed. A Downloads folder is full of .exe,
+#: .msi and .zip files; reading them as CSV would be slow, useless and (with
+#: --count-rows) would stream gigabytes of binary through the csv module.
+TABULAR_SUFFIXES = {".csv", ".tsv", ".gz", ".gzip", ".feather", ".parquet"}
 
 MAX_DISTINCT = 2000          # per-column distinct values tracked before giving up
 MAX_IDS = 600_000            # per-file neuron ids retained for cross-file comparison
@@ -294,6 +299,10 @@ def profile_file(path: Path, asset: str | None, *, sample_rows: int, count_rows:
             if not head.strip():
                 info["error"] = "file appears empty"
                 return info
+            if "\x00" in head[:4096]:
+                info["error"] = "binary content -- not a CSV; not parsed"
+                info["role"] = "not a table -- ignored"
+                return info
             first_line = head.splitlines()[0]
             delim = max([",", "\t", ";"], key=first_line.count)
             info["delimiter"] = delim
@@ -395,6 +404,20 @@ def scan(root: Path, *, sample_rows: int, count_rows: bool, deep: bool, include_
         if len(p.relative_to(root).parts) > 2:
             continue
         asset = ASSET_BY_FILENAME.get(p.name.lower())
+        if asset is None and p.suffix.lower() not in TABULAR_SUFFIXES:
+            # Inventory it, do not open it. This is what keeps the script usable
+            # when --dir is a real Downloads folder rather than a clean FAFB folder.
+            files.append({"file": p.name, "path": str(p), "size_bytes": p.stat().st_size,
+                          "container": p.suffix.lstrip(".").lower() or "unknown", "asset": None,
+                          "role": "not a table -- ignored", "header": [], "columns": [],
+                          "note": "non-tabular file, not opened"})
+            continue
+        if asset is None and p.stat().st_size > 2_000_000_000:
+            files.append({"file": p.name, "path": str(p), "size_bytes": p.stat().st_size,
+                          "container": "skipped", "asset": None, "role": "unrecognised",
+                          "header": [], "columns": [],
+                          "note": "unrecognised file larger than 2 GB, not opened"})
+            continue
         if not include_large and asset in LARGE_ASSETS:
             files.append({"file": p.name, "path": str(p), "size_bytes": p.stat().st_size,
                           "container": "skipped", "asset": asset, "role": ROLE.get(asset, ""),
@@ -533,23 +556,32 @@ def write_markdown(rep: dict, out: Path) -> None:
         "",
     ]
     rows = []
+    ignored = 0
     for f in rep["files"]:
+        if f.get("asset") is None and not f.get("header"):
+            ignored += 1
+            continue
         rows.append([f"`{f['file']}`", f.get("asset") or "unrecognised", f.get("role") or "-",
                      "LEGACY" if f.get("legacy") else ("skipped (large)" if f.get("container") == "skipped" else "use")])
     L += _table(["file", "asset key", "role", "status"], rows)
+    if ignored:
+        L += ["", f"{ignored} further files in this directory are not tables (installers, images, archives, "
+              "source files). They were inventoried by name and size only -- never opened. If this is your "
+              "Downloads folder rather than a dedicated FAFB folder, that is expected."]
 
     L += ["", "## 2. File sizes", ""]
-    total = sum(f.get("size_bytes", 0) for f in rep["files"])
+    relevant = [f for f in rep["files"] if f.get("asset") or f.get("header")]
+    total = sum(f.get("size_bytes", 0) for f in relevant)
     L += _table(["file", "bytes", "MiB"],
                 [[f"`{f['file']}`", f"{f.get('size_bytes', 0):,}", f"{f.get('size_bytes', 0) / 1048576:.1f}"]
-                 for f in rep["files"]])
-    L += ["", f"Total on disk: **{total:,} bytes ({total / 1073741824:.2f} GiB)**."]
+                 for f in relevant])
+    L += ["", f"Total of the tables above: **{total:,} bytes ({total / 1073741824:.2f} GiB)**."]
 
     L += ["", "## 3. File formats", ""]
     L += _table(["file", "container", "delimiter", "members"],
                 [[f"`{f['file']}`", f.get("container", "?"),
                   repr(f.get("delimiter")) if f.get("delimiter") else "-",
-                  _fmt(f.get("n_members"))] for f in rep["files"]])
+                  _fmt(f.get("n_members"))] for f in relevant])
 
     L += ["", "## 4. Row counts", ""]
     rows = []
@@ -857,13 +889,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"scanned {root}  ({rep['n_files']} files)")
     if not rep["files"]:
         print("  no files found in that directory (is the path right? is the download still a .zip?)")
+    n_ignored = 0
     for f in rep["files"]:
+        if f.get("asset") is None and not f.get("header"):
+            n_ignored += 1
+            continue
         mark = f.get("asset") or ("skipped" if f.get("container") == "skipped" else "unrecognised")
         print(f"  [{mark:>26}] {f['file']:<44} {f.get('size_bytes', 0):>14,} bytes  cols={len(f.get('header', []))}")
         if f.get("columns_missing"):
             print(f"  {'':>26}   !! missing documented columns: {', '.join(f['columns_missing'])}")
         if f.get("error"):
             print(f"  {'':>26}   !! {f['error']}")
+    if n_ignored:
+        print(f"  ({n_ignored} non-table files inventoried by name/size only -- never opened)")
     print(f"\nwrote {j}\nwrote {md}")
     print(f"hazards flagged: {len(rep['hazards'])}")
     if not found:

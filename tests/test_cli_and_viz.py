@@ -88,7 +88,7 @@ def test_rules_lists_every_registry(capsys):
         assert token in out, token
 
 
-def test_doctor_reports_missing_data_without_crashing(capsys, tmp_path, monkeypatch):
+def test_doctor_reports_missing_data_without_crashing(capsys, tmp_path, monkeypatch, isolated_home):
     monkeypatch.delenv("FAFB_DATA_PATH", raising=False)
     monkeypatch.setattr("fruitfly.paths.repo_root", lambda: tmp_path)
     assert run_cli("doctor", "--data-dir", str(tmp_path / "nope_missing")) == 0
@@ -373,3 +373,51 @@ def test_inspection_report_says_unknown_rather_than_guessing(tmp_path, sample_fa
     conn = next(f for f in report["files"] if f.get("asset") == "connections_filtered")
     assert conn["row_count_is_exact"] is False
     assert conn["n_rows_profiled"] == 5
+
+
+def test_inspection_script_never_opens_non_table_files(tmp_path, sample_fafb):
+    """A real Downloads folder is mostly installers. The audit must not parse them.
+
+    Reproduces what happened on the user's machine: `--dir ~/Downloads` where the FAFB
+    files sit next to a 1.5 GB .exe. Opening those as CSV would be slow and useless,
+    and with --count-rows would stream the whole binary through the csv module.
+    """
+    junk = tmp_path / "downloads"
+    junk.mkdir()
+    for f in sample_fafb.glob("*.gz"):
+        (junk / f.name).write_bytes(f.read_bytes())
+    (junk / "BigInstaller.exe").write_bytes(b"MZ\x00\x00" + b"\x00\xff" * 500_000)
+    (junk / "photo.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 1000)
+    (junk / "script.lua").write_text("print('hi')\n", encoding="utf-8")
+
+    out = tmp_path / "rep"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "inspect_fafb.py"), "--dir", str(junk),
+         "--out", str(out), "--count-rows"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(out.with_suffix(".json").read_text())
+    for name in ("BigInstaller.exe", "photo.jpg", "script.lua"):
+        entry = next(f for f in report["files"] if f["file"] == name)
+        assert not entry["header"], f"{name} was parsed as a table"
+        assert not entry["columns"]
+    conn = next(f for f in report["files"] if f.get("asset") == "connections_filtered")
+    assert conn["header"], "the real assets must still be profiled alongside the junk"
+    assert "non-table files" in proc.stdout
+
+
+def test_doctor_only_calls_the_two_core_assets_required(capsys, sample_fafb, monkeypatch):
+    """`visual_types`/`coordinates` are enrichment, not requirements.
+
+    The user's download has connections + neurons and can build a graph; the doctor
+    used to print REQUIRED next to assets the pipeline runs without.
+    """
+    from fruitfly.dataset.assets import CORE_ASSETS
+    from fruitfly.dataset.discover import discover
+
+    assert CORE_ASSETS == ("connections_filtered", "nt_predictions")
+    text = discover(sample_fafb).report_text()
+    for line in text.splitlines():
+        if "(REQUIRED)" in line:
+            assert line.split()[0] in CORE_ASSETS, line

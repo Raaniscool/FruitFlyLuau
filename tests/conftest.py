@@ -5,6 +5,7 @@ download (see DATA.md).
 
 from __future__ import annotations
 
+import pathlib
 import sys
 from pathlib import Path
 
@@ -72,3 +73,23 @@ def base_cfg(tmp_path) -> AppConfig:
     cfg.lif.noise = 0.0
     cfg.lif.background_current = 0.0
     return cfg
+
+
+@pytest.fixture()
+def isolated_home(tmp_path, monkeypatch):
+    """Point ``Path.home()`` at an empty directory.
+
+    Several path-resolution tests assert "nothing was found". On a real Windows
+    machine ``~/Downloads`` exists and often *is* the FAFB folder, so without this
+    the tests assert a property of the developer's disk rather than of the code.
+    """
+    home = tmp_path / "home"
+    (home / "Downloads").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOMEDRIVE", str(home.drive or ""))
+    monkeypatch.setenv("HOMEPATH", str(home))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    return home

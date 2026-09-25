@@ -268,6 +268,9 @@ def test_execute_never_runs_anything(tmp_path, monkeypatch, src):
 
 
 def test_backend_availability_reports_the_missing_tool_not_a_crash():
+    # windows_job is included deliberately: it must report unavailable *on Windows
+    # too*, because the Job Object backend is not implemented. Claiming otherwise
+    # would tell a caller that sandboxed execution is possible when it is not.
     for name in ("", "firejail", "docker", "windows_job", "made_up_sandbox"):
         ok, why = backend_available(name)
         assert ok is False, f"{name} claims to be available in this build"

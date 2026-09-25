@@ -148,7 +148,13 @@ def backend_available(name: str) -> tuple[bool, str]:
     if name == "docker":
         return (shutil.which("docker") is not None), "docker binary present" if shutil.which("docker") else "docker not on PATH"
     if name == "windows_job":
-        return (sys.platform.startswith("win")), "windows Job Object + restricted token required (not implemented in v0.1)"
+        # Being on Windows is necessary but NOT sufficient: the Job Object +
+        # restricted-token backend is not implemented. Reporting "available"
+        # here would let a caller believe sandboxed execution is possible.
+        why = ("windows Job Object + restricted token required (not implemented in v0.1)"
+               if sys.platform.startswith("win")
+               else "windows_job backend requires Windows, and is not implemented in v0.1")
+        return False, why
     return False, f"unknown backend {name!r}"
 
 

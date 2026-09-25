@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..utils import get_logger, human_bytes
-from .assets import ASSETS, AssetSpec
+from .assets import ASSETS, CORE_ASSETS, AssetSpec
 from .schema import (
     CONNECTION_FIELDS,
     COORD_FIELDS,
@@ -140,10 +140,18 @@ class DatasetInventory:
             else:
                 lines.append(
                     f"{key:<28} {spec.display[:33]:<34} {'-':<38} {'-':>10}  absent"
-                    + ("  (optional)" if not spec.required_for else "  (REQUIRED)")
+                    + ("  (REQUIRED)" if key in CORE_ASSETS else
+                       ("  (optional: " + spec.required_for[0] + ")" if spec.required_for else "  (optional)"))
                 )
-        for p in self.unmatched:
+        shown = self.unmatched[:10]
+        for p in shown:
             lines.append(f"{'-':<28} {'-':<34} {p.path.name[:37]:<38} {human_bytes(p.size_bytes):>10}  unrecognised")
+        if len(self.unmatched) > len(shown):
+            rest = len(self.unmatched) - len(shown)
+            lines.append(f"{'-':<28} {'-':<34} {('... and %d more unrecognised files' % rest):<38} {'-':>10}  unrecognised")
+            lines.append("")
+            lines.append("note: this directory holds many unrelated files. Point the project at a folder that "
+                         "contains only the FAFB assets (set " + "FAFB_DATA_PATH" + ") to keep scans fast.")
         if self.notes:
             lines.append("")
             lines += [f"note: {n}" for n in self.notes]
