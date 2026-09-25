@@ -49,9 +49,18 @@ so CI does not need a 68 MB download. Nothing in it is real connectomics data.
 3. **Before trusting any number, validate the loader against your actual bytes:**
 
 ```bash
-python scripts/inspect_fafb.py --dir "$env:FAFB_DATA_PATH" --count-rows
+python scripts/inspect_fafb.py --dir "$env:FAFB_DATA_PATH" --count-rows --write-profile
+# or, for the full audit (duplicate pairs, reciprocity, exact counts; slower, more RAM):
+python scripts/inspect_fafb.py --dir "$env:FAFB_DATA_PATH" --deep --write-profile
 ```
 
+   It writes an 18-section audit — inventory, sizes, formats, row counts, per-column
+   inferred types and missing-value rates, example rows, unique-ID statistics,
+   cross-file ID compatibility, connection- and synapse-table structure, cell-type,
+   visual and neurotransmitter annotation structure, schema hazards, a recommended
+   canonical internal schema, and which files the first experiment needs versus which
+   stay lazy-loaded. Anything it cannot establish from the bytes is written as
+   `UNKNOWN -- requires further investigation` rather than guessed.
    That script needs nothing but the Python standard library, so it runs on a plain
    Windows install. It writes `fafb_schema_report.md` / `.json`; commit them (or paste
    them into an issue) and the loader's column aliases and row counts get checked

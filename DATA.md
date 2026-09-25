@@ -46,6 +46,30 @@ These are the numbers a correct download should produce. The loader reports what
 actually found (`fruitfly.dataset.stats.table_stats`), and
 `python scripts/inspect_fafb.py --count-rows` writes them to a report you can commit.
 
+Every number in the table below comes from documentation, not from bytes this project
+has read. The audit script is what replaces documentation with measurement; where it
+disagrees with this table, the audit wins and this table should be corrected.
+
+### The real-data audit
+
+```bash
+python scripts/inspect_fafb.py --dir "<your FAFB folder>" --deep --write-profile
+```
+
+| flag | effect | cost |
+|---|---|---|
+| (none) | profiles the first 250,000 rows of each CSV for types, missing values, distinct values | seconds |
+| `--sample-rows N` | change that budget | linear in N |
+| `--count-rows` | stream every row for exact row counts | one full decompress per file |
+| `--deep` | full profiling plus duplicate `(pre, post)` detection and reciprocity | one extra pass; holds up to 8M pair keys (~0.5 GB at FAFB scale) |
+| `--include-large` | also opens the 2.7 GB synapse table and the 13 GB skeleton zip | minutes |
+| `--write-profile` | emits `config/fafb_profile.yaml` mapping documented column names to the real ones | free |
+
+It never loads a file into memory: every pass is a streaming `csv.reader` over a
+`gzip` text stream, per-column state is bounded (distinct values capped at 2,000, ids
+at 600,000 per file), and the two multi-gigabyte assets are skipped unless asked for.
+The output is `fafb_schema_report.md` (18 sections) and `fafb_schema_report.json`.
+
 | asset | size | rows | notes |
 |---|---|---|---|
 | `connections_princeton.csv.gz` | 68,456,801 B | 5,342,446 | 137,518 unique `pre_root_id`, 130,183 unique `post_root_id`; `syn_count` spans 1–2,633; pairs totalling <5 synapses are excluded from this file |

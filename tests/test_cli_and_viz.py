@@ -318,3 +318,58 @@ def test_write_profile_round_trips_into_the_loader(tmp_path, sample_fafb, monkey
     # a profile describing a schema-conformant file must not change the outcome
     table = load_connections(sample_fafb)
     assert table.pre.size > 0
+
+
+def test_inspection_report_has_every_required_section(tmp_path, sample_fafb):
+    """The audit report must answer all 18 questions, or say it cannot.
+
+    The real FAFB download lives on the user's machine, not in CI, so the contract we
+    can actually test is the *shape* of the report: the section headings exist, the
+    measured facts are present for a schema-correct directory, and nothing is invented.
+    """
+    out = tmp_path / "rep"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "inspect_fafb.py"), "--dir", str(sample_fafb),
+         "--out", str(out), "--deep", "--count-rows"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = out.with_suffix(".md").read_text()
+    for n, title in enumerate([
+        "Dataset inventory", "File sizes", "File formats", "Row counts",
+        "Column names and inferred types", "Example rows", "Unique-ID statistics",
+        "Missing-value statistics", "Cross-file ID compatibility", "Connection-table structure",
+        "Synapse-table structure", "Cell-type / classification structure",
+        "Visual-neuron annotation structure", "Neurotransmitter structure",
+        "Potential schema hazards", "Recommended canonical internal schema",
+        "Files to use for the first real experiment", "Files to keep optional / lazy-loaded",
+    ], start=1):
+        assert f"## {n}. {title}" in text, f"section {n} ({title}) missing from the report"
+
+    report = json.loads(out.with_suffix(".json").read_text())
+    conn = next(f for f in report["files"] if f.get("asset") == "connections_filtered")
+    assert conn["row_count_is_exact"] and conn["n_rows_including_header"] > 0
+    assert conn["n_unique_pairs"] <= conn["n_rows_including_header"]
+    assert conn["n_unique_pre"] > 0 and conn["n_unique_post"] > 0
+    # the >2^53 id hazard is a real property of FlyWire root ids and must be flagged
+    assert any("2^53" in h for h in report["hazards"])
+    # cross-file id compatibility was actually computed, not asserted
+    assert any(r["asset"] == "nt_predictions" and r["n_shared_with_reference"] > 0
+               for r in report["cross_file_ids"])
+
+
+def test_inspection_report_says_unknown_rather_than_guessing(tmp_path, sample_fafb):
+    """Without --count-rows the row count is unmeasured, so it must be reported as unknown."""
+    out = tmp_path / "shallow"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "inspect_fafb.py"), "--dir", str(sample_fafb),
+         "--out", str(out), "--sample-rows", "5"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = out.with_suffix(".md").read_text()
+    assert "UNKNOWN -- requires further investigation" in text
+    report = json.loads(out.with_suffix(".json").read_text())
+    conn = next(f for f in report["files"] if f.get("asset") == "connections_filtered")
+    assert conn["row_count_is_exact"] is False
+    assert conn["n_rows_profiled"] == 5
